@@ -58,6 +58,18 @@ export OFTALMO_DB_USER="vfontes"
 export OFTALMO_DB_PASSWORD="Saude@123Oftal"
 ```
 
+Se os nomes das colunas no banco forem diferentes do dicionário, você pode mapear:
+
+```bash
+export OFTALMO_COL_GVE="nome_real_coluna_gve"
+export OFTALMO_COL_DRS="nome_real_coluna_drs"
+export OFTALMO_COL_MUNICIPIO="nome_real_coluna_municipio"
+export OFTALMO_COL_CASOS="nome_real_coluna_casos"
+export OFTALMO_COL_DATA="nome_real_coluna_data_notificacao"
+export OFTALMO_COL_ANO="nome_real_coluna_ano"
+export OFTALMO_COL_SEMANA="nome_real_coluna_semana_epidemiologica"
+```
+
 ## Instalação
 
 ```r

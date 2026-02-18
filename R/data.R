@@ -95,6 +95,65 @@ pick_existing_column <- function(df, candidates) {
   cols[idx[1]]
 }
 
+pick_existing_column_regex <- function(df, regex_candidates) {
+  cols <- names(df)
+  cols_lower <- tolower(cols)
+
+  for (pattern in regex_candidates) {
+    matches <- grepl(pattern, cols_lower, perl = TRUE)
+    if (any(matches)) {
+      return(cols[which(matches)[1]])
+    }
+  }
+
+  NULL
+}
+
+pick_column_with_override <- function(
+  df,
+  override_env_var,
+  candidates = character(),
+  regex_candidates = character()
+) {
+  cols <- names(df)
+  cols_lower <- tolower(cols)
+
+  override_value <- trimws(Sys.getenv(override_env_var, unset = ""))
+  if (override_value != "") {
+    idx <- match(tolower(override_value), cols_lower)
+    if (!is.na(idx)) {
+      return(cols[idx])
+    }
+  }
+
+  exact_match <- pick_existing_column(df, candidates)
+  if (!is.null(exact_match)) {
+    return(exact_match)
+  }
+
+  if (length(regex_candidates) > 0) {
+    regex_match <- pick_existing_column_regex(df, regex_candidates)
+    if (!is.null(regex_match)) {
+      return(regex_match)
+    }
+  }
+
+  NULL
+}
+
+format_columns_preview <- function(cols, max_items = 30) {
+  cols <- as.character(cols)
+  if (length(cols) <= max_items) {
+    return(paste(cols, collapse = ", "))
+  }
+  paste0(
+    paste(cols[1:max_items], collapse = ", "),
+    ", ... (total: ",
+    length(cols),
+    " colunas)"
+  )
+}
+
 title_case_safe <- function(x) {
   x <- trimws(as.character(x))
   x[tolower(x) %in% c("", "na", "n/a", "null")] <- "Não informado"
@@ -399,15 +458,60 @@ prepare_oftalmo_dataset <- function(raw_data) {
     return(NULL)
   }
 
-  date_col <- pick_existing_column(raw_data, c("DtNotificacao", "dt_notificacao", "data_notificacao"))
-  ano_col <- pick_existing_column(raw_data, c("ano", "Ano", "AnoNotificacao", "ano_notificacao"))
-  semana_col <- pick_existing_column(raw_data, c("semana", "Semana", "SE", "SemanaEpidemiologica", "semana_epidemiologica"))
-  municipio_col <- pick_existing_column(raw_data, c("MunicipioNotificacao", "municipio_notificacao", "municipio"))
-  gve_col <- pick_existing_column(raw_data, c("dominio_gve", "gve"))
-  drs_col <- pick_existing_column(raw_data, c("dominio_drs", "drs", "DRS"))
-  casos_col <- pick_existing_column(raw_data, c("TotalCaso", "total_caso", "casos", "totalcaso"))
-  surto_col <- pick_existing_column(raw_data, c("NuSurto", "nu_surto"))
-  surto_flag_col <- pick_existing_column(raw_data, c("Surto", "surto"))
+  date_col <- pick_column_with_override(
+    raw_data,
+    override_env_var = "OFTALMO_COL_DATA",
+    candidates = c("DtNotificacao", "dt_notificacao", "data_notificacao"),
+    regex_candidates = c("^dt.*not", "^data.*not")
+  )
+  ano_col <- pick_column_with_override(
+    raw_data,
+    override_env_var = "OFTALMO_COL_ANO",
+    candidates = c("ano", "Ano", "AnoNotificacao", "ano_notificacao"),
+    regex_candidates = c("^ano$", "ano.*not", "year")
+  )
+  semana_col <- pick_column_with_override(
+    raw_data,
+    override_env_var = "OFTALMO_COL_SEMANA",
+    candidates = c("semana", "Semana", "SE", "SemanaEpidemiologica", "semana_epidemiologica"),
+    regex_candidates = c("^semana$", "semana.*epi", "^se$")
+  )
+  municipio_col <- pick_column_with_override(
+    raw_data,
+    override_env_var = "OFTALMO_COL_MUNICIPIO",
+    candidates = c("MunicipioNotificacao", "municipio_notificacao", "municipio"),
+    regex_candidates = c("municipio", "munic")
+  )
+  gve_col <- pick_column_with_override(
+    raw_data,
+    override_env_var = "OFTALMO_COL_GVE",
+    candidates = c("dominio_gve", "gve"),
+    regex_candidates = c("gve", "grupo.*vigil", "vigilancia.*epid")
+  )
+  drs_col <- pick_column_with_override(
+    raw_data,
+    override_env_var = "OFTALMO_COL_DRS",
+    candidates = c("dominio_drs", "drs", "DRS"),
+    regex_candidates = c("\\bdrs\\b", "diretoria.*regional", "regional.*saude")
+  )
+  casos_col <- pick_column_with_override(
+    raw_data,
+    override_env_var = "OFTALMO_COL_CASOS",
+    candidates = c("TotalCaso", "total_caso", "casos", "totalcaso"),
+    regex_candidates = c("total.*caso", "\\bcasos\\b", "qtd.*cas")
+  )
+  surto_col <- pick_column_with_override(
+    raw_data,
+    override_env_var = "OFTALMO_COL_NU_SURTO",
+    candidates = c("NuSurto", "nu_surto"),
+    regex_candidates = c("nu.*surto", "numero.*surto")
+  )
+  surto_flag_col <- pick_column_with_override(
+    raw_data,
+    override_env_var = "OFTALMO_COL_SURTO_FLAG",
+    candidates = c("Surto", "surto"),
+    regex_candidates = c("^surto$")
+  )
 
   missing_columns <- character()
   if (is.null(municipio_col)) missing_columns <- c(missing_columns, "MunicipioNotificacao")
@@ -415,11 +519,14 @@ prepare_oftalmo_dataset <- function(raw_data) {
   if (is.null(casos_col)) missing_columns <- c(missing_columns, "TotalCaso")
 
   if (length(missing_columns) > 0) {
+    cols_preview <- format_columns_preview(names(raw_data))
     stop(
       paste0(
         "Colunas obrigatórias não encontradas na tabela: ",
         paste(missing_columns, collapse = ", "),
-        ". Verifique os nomes reais no banco."
+        ". Verifique os nomes reais no banco. ",
+        "Colunas disponíveis: ", cols_preview, ". ",
+        "Se necessário, configure OFTALMO_COL_GVE/OFTALMO_COL_MUNICIPIO/OFTALMO_COL_CASOS."
       )
     )
   }
