@@ -168,6 +168,11 @@ ui <- tagList(
             color: #005ca9;
             font-weight: 600;
           }
+          #tabela_municipios table.dataTable tbody td,
+          #tabela_municipios table.dataTable thead th {
+            white-space: nowrap;
+            font-size: 0.86rem;
+          }
           @media (max-width: 768px) {
             .sp-gov-banner-img {
               max-height: 72px;
@@ -267,6 +272,64 @@ ui <- tagList(
         br(),
         layout_columns(
           col_widths = c(6, 6),
+          value_box(
+            title = "Risco preditivo (IA)",
+            value = textOutput("risco_ia_nivel"),
+            subtitle = textOutput("risco_ia_prob"),
+            showcase = icon("brain"),
+            theme = "warning",
+            class = "h-100"
+          ),
+          value_box(
+            title = "Semanas críticas previstas",
+            value = textOutput("semanas_criticas_previstas"),
+            subtitle = textOutput("resumo_tendencia_curta"),
+            showcase = icon("chart-line"),
+            theme = "danger",
+            class = "h-100"
+          )
+        ),
+        br(),
+        layout_columns(
+          col_widths = c(6, 6),
+          card(
+            class = "custom-card",
+            card_header("Modelo de tendência semanal (projeção curta)"),
+            plotlyOutput("grafico_tendencia", height = "350px"),
+            full_screen = TRUE
+          ),
+          card(
+            class = "custom-card",
+            card_header("Motor de alerta preditivo de surtos (IA)"),
+            plotlyOutput("grafico_alerta_ia", height = "350px"),
+            full_screen = TRUE
+          )
+        ),
+        br(),
+        layout_columns(
+          col_widths = c(4, 4, 4),
+          card(
+            class = "custom-card",
+            card_header("Distribuição por sexo"),
+            plotlyOutput("grafico_sexo", height = "320px"),
+            full_screen = TRUE
+          ),
+          card(
+            class = "custom-card",
+            card_header("Distribuição por faixa etária"),
+            plotlyOutput("grafico_faixa_etaria", height = "320px"),
+            full_screen = TRUE
+          ),
+          card(
+            class = "custom-card",
+            card_header("Ações e treinamentos realizados"),
+            plotlyOutput("grafico_acoes_treinamentos", height = "320px"),
+            full_screen = TRUE
+          )
+        ),
+        br(),
+        layout_columns(
+          col_widths = c(6, 6),
           card(
             class = "custom-card",
             card_header("Série temporal — casos por semana epidemiológica (barras)"),
@@ -321,7 +384,7 @@ ui <- tagList(
         br(),
         card(
           class = "custom-card",
-          card_header("Tabela de municípios — casos, incidência e situação de surto"),
+          card_header("Tabela operacional por município (alerta rápido)"),
           card_body(
             DT::DTOutput("tabela_municipios")
           ),
@@ -348,7 +411,8 @@ ui <- tagList(
             <ul>
               <li><strong>Filtros encadeados:</strong> Ano, DRS, GVE e Município.</li>
               <li><strong>Dados:</strong> integração com MariaDB (com opção de fallback via variável de ambiente).</li>
-              <li><strong>Análises:</strong> série temporal, canal endêmico, surtos e situação epidemiológica.</li>
+              <li><strong>Análises:</strong> série temporal, canal endêmico, diagrama de controle, tendência e alerta preditivo de surtos.</li>
+              <li><strong>Painel operacional:</strong> sexo, faixa etária, ações/treinamentos e tabela de municípios com alerta visual.</li>
             </ul>
             "
           )

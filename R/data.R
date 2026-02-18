@@ -172,6 +172,18 @@ sanitize_numeric_values <- function(values, default = 0) {
   values
 }
 
+sanitize_count_or_flag <- function(values, default = 0) {
+  values_chr <- trimws(tolower(as.character(values)))
+  values_chr[is.na(values_chr)] <- ""
+
+  numeric_guess <- suppressWarnings(as.numeric(gsub(",", ".", values_chr, fixed = TRUE)))
+  flag_guess <- ifelse(values_chr %in% c("1", "true", "sim", "s", "yes", "y", "x"), 1, 0)
+
+  out <- ifelse(!is.na(numeric_guess), numeric_guess, flag_guess)
+  out[is.na(out)] <- default
+  pmax(round(out), 0)
+}
+
 infer_drs_from_gve_text <- function(gve_values) {
   gve_values <- as.character(gve_values)
   extracted <- rep(NA_character_, length(gve_values))
@@ -518,6 +530,78 @@ prepare_oftalmo_dataset <- function(raw_data) {
     candidates = c("Surto", "surto"),
     regex_candidates = c("^surto$")
   )
+  sex_masc_col <- pick_column_with_override(
+    raw_data,
+    override_env_var = "OFTALMO_COL_SEXO_MASC",
+    candidates = c("SexMasc", "sex_masc", "sexo_masc", "masculino"),
+    regex_candidates = c("sex.*masc", "sexo.*masc", "masculino")
+  )
+  sex_fem_col <- pick_column_with_override(
+    raw_data,
+    override_env_var = "OFTALMO_COL_SEXO_FEM",
+    candidates = c("SexFem", "sex_fem", "sexo_fem", "feminino"),
+    regex_candidates = c("sex.*fem", "sexo.*fem", "feminino")
+  )
+  fx_menor1_col <- pick_column_with_override(
+    raw_data,
+    override_env_var = "OFTALMO_COL_FX_MENOR1",
+    candidates = c("FxMenorUmAno", "fx_menor_um_ano", "fx_menor1", "faixa_menor1"),
+    regex_candidates = c("fx.*menor", "faixa.*menor", "menor.*ano")
+  )
+  fx_1a4_col <- pick_column_with_override(
+    raw_data,
+    override_env_var = "OFTALMO_COL_FX_1A4",
+    candidates = c("FxUmQuatro", "fx_um_quatro", "fx_1a4", "faixa_1a4"),
+    regex_candidates = c("fx.*um.*quatro", "fx.*1.*4", "faixa.*1.*4")
+  )
+  fx_5a9_col <- pick_column_with_override(
+    raw_data,
+    override_env_var = "OFTALMO_COL_FX_5A9",
+    candidates = c("FxCincoNove", "fx_cinco_nove", "fx_5a9", "faixa_5a9"),
+    regex_candidates = c("fx.*cinco.*nove", "fx.*5.*9", "faixa.*5.*9")
+  )
+  fx_10a14_col <- pick_column_with_override(
+    raw_data,
+    override_env_var = "OFTALMO_COL_FX_10A14",
+    candidates = c("FxDezQuatorze", "fx_dez_quatorze", "fx_10a14", "faixa_10a14"),
+    regex_candidates = c("fx.*dez.*quatorze", "fx.*10.*14", "faixa.*10.*14")
+  )
+  fx_15mais_col <- pick_column_with_override(
+    raw_data,
+    override_env_var = "OFTALMO_COL_FX_15MAIS",
+    candidates = c("FxQuizeOuMais", "FxQuinzeOuMais", "fx_15mais", "faixa_15_mais"),
+    regex_candidates = c("fx.*quin", "fx.*15", "faixa.*15")
+  )
+  acao_educativa_col <- pick_column_with_override(
+    raw_data,
+    override_env_var = "OFTALMO_COL_ACAO_EDUCATIVA",
+    candidates = c("NuAcaoEducativa", "nu_acao_educativa", "acao_educativa"),
+    regex_candidates = c("acao.*educ")
+  )
+  treinamento_col <- pick_column_with_override(
+    raw_data,
+    override_env_var = "OFTALMO_COL_TREINAMENTO",
+    candidates = c("NuTreinamento", "nu_treinamento", "treinamento"),
+    regex_candidates = c("treinamento")
+  )
+  coleta_material_col <- pick_column_with_override(
+    raw_data,
+    override_env_var = "OFTALMO_COL_COLETA_MATERIAL",
+    candidates = c("NuColetaMaterialBio", "nu_coleta_material_bio", "coleta_material"),
+    regex_candidates = c("coleta.*material")
+  )
+  encaminhamento_col <- pick_column_with_override(
+    raw_data,
+    override_env_var = "OFTALMO_COL_ENCAMINHAMENTO",
+    candidates = c("NuEncamimento", "NuEncaminhamento", "nu_encaminhamento", "encaminhamento"),
+    regex_candidates = c("encam", "encaminha")
+  )
+  medida_adotada_col <- pick_column_with_override(
+    raw_data,
+    override_env_var = "OFTALMO_COL_MEDIDA_ADOTADA",
+    candidates = c("MedidaAdotada", "medida_adotada"),
+    regex_candidates = c("medida.*adot")
+  )
 
   missing_columns <- character()
   if (is.null(municipio_col)) missing_columns <- c(missing_columns, "MunicipioNotificacao")
@@ -560,20 +644,59 @@ prepare_oftalmo_dataset <- function(raw_data) {
         ifelse(tolower(as.character(.data[[surto_flag_col]])) %in% c("1", "true", "sim", "s"), 1, 0)
       } else {
         0
-      }
+      },
+      sexo_masc = if (!is.null(sex_masc_col)) sanitize_numeric_values(.data[[sex_masc_col]], default = 0) else 0,
+      sexo_fem = if (!is.null(sex_fem_col)) sanitize_numeric_values(.data[[sex_fem_col]], default = 0) else 0,
+      fx_menor1 = if (!is.null(fx_menor1_col)) sanitize_numeric_values(.data[[fx_menor1_col]], default = 0) else 0,
+      fx_1a4 = if (!is.null(fx_1a4_col)) sanitize_numeric_values(.data[[fx_1a4_col]], default = 0) else 0,
+      fx_5a9 = if (!is.null(fx_5a9_col)) sanitize_numeric_values(.data[[fx_5a9_col]], default = 0) else 0,
+      fx_10a14 = if (!is.null(fx_10a14_col)) sanitize_numeric_values(.data[[fx_10a14_col]], default = 0) else 0,
+      fx_15mais = if (!is.null(fx_15mais_col)) sanitize_numeric_values(.data[[fx_15mais_col]], default = 0) else 0,
+      acao_educativa = if (!is.null(acao_educativa_col)) {
+        sanitize_count_or_flag(.data[[acao_educativa_col]], default = 0)
+      } else if (!is.null(medida_adotada_col)) {
+        sanitize_count_or_flag(.data[[medida_adotada_col]], default = 0)
+      } else {
+        0
+      },
+      treinamentos = if (!is.null(treinamento_col)) sanitize_count_or_flag(.data[[treinamento_col]], default = 0) else 0,
+      coleta_material = if (!is.null(coleta_material_col)) sanitize_count_or_flag(.data[[coleta_material_col]], default = 0) else 0,
+      encaminhamentos = if (!is.null(encaminhamento_col)) sanitize_count_or_flag(.data[[encaminhamento_col]], default = 0) else 0
     ) %>%
     mutate(
       ano = dplyr::coalesce(ano_registro, year(data_notificacao)),
       semana = dplyr::coalesce(semana_registro, isoweek(data_notificacao)),
       semana = pmin(pmax(semana, 1), 53),
       populacao = infer_population(municipio),
-      surtos = surto_n + surto_flag
+      surtos = surto_n + surto_flag,
+      sexo_masc = ifelse(is.na(sexo_masc), 0, pmax(round(sexo_masc), 0)),
+      sexo_fem = ifelse(is.na(sexo_fem), 0, pmax(round(sexo_fem), 0)),
+      fx_menor1 = ifelse(is.na(fx_menor1), 0, pmax(round(fx_menor1), 0)),
+      fx_1a4 = ifelse(is.na(fx_1a4), 0, pmax(round(fx_1a4), 0)),
+      fx_5a9 = ifelse(is.na(fx_5a9), 0, pmax(round(fx_5a9), 0)),
+      fx_10a14 = ifelse(is.na(fx_10a14), 0, pmax(round(fx_10a14), 0)),
+      fx_15mais = ifelse(is.na(fx_15mais), 0, pmax(round(fx_15mais), 0)),
+      acao_educativa = ifelse(is.na(acao_educativa), 0, pmax(round(acao_educativa), 0)),
+      treinamentos = ifelse(is.na(treinamentos), 0, pmax(round(treinamentos), 0)),
+      coleta_material = ifelse(is.na(coleta_material), 0, pmax(round(coleta_material), 0)),
+      encaminhamentos = ifelse(is.na(encaminhamentos), 0, pmax(round(encaminhamentos), 0))
     ) %>%
     filter(!is.na(ano), !is.na(semana)) %>%
     group_by(ano, semana, drs, gve, municipio, uvis, populacao) %>%
     summarise(
       casos = sum(casos, na.rm = TRUE),
       surtos = sum(surtos, na.rm = TRUE),
+      sexo_masc = sum(sexo_masc, na.rm = TRUE),
+      sexo_fem = sum(sexo_fem, na.rm = TRUE),
+      fx_menor1 = sum(fx_menor1, na.rm = TRUE),
+      fx_1a4 = sum(fx_1a4, na.rm = TRUE),
+      fx_5a9 = sum(fx_5a9, na.rm = TRUE),
+      fx_10a14 = sum(fx_10a14, na.rm = TRUE),
+      fx_15mais = sum(fx_15mais, na.rm = TRUE),
+      acao_educativa = sum(acao_educativa, na.rm = TRUE),
+      treinamentos = sum(treinamentos, na.rm = TRUE),
+      coleta_material = sum(coleta_material, na.rm = TRUE),
+      encaminhamentos = sum(encaminhamentos, na.rm = TRUE),
       .groups = "drop"
     ) %>%
     mutate(
@@ -631,6 +754,24 @@ generate_mock_data <- function() {
       casos = rpois(n(), lambda = lambda),
       populacao = infer_population(municipio),
       surtos = ifelse(casos > quantile(casos, 0.9, na.rm = TRUE), 1, 0),
+      prop_masc = runif(n(), min = 0.44, max = 0.56),
+      sexo_masc = pmax(round(casos * prop_masc), 0),
+      sexo_fem = pmax(casos - sexo_masc, 0),
+      p_fx_menor1 = runif(n(), 0.03, 0.09),
+      p_fx_1a4 = runif(n(), 0.18, 0.28),
+      p_fx_5a9 = runif(n(), 0.18, 0.27),
+      p_fx_10a14 = runif(n(), 0.14, 0.22),
+      p_fx_15mais = runif(n(), 0.28, 0.40),
+      p_fx_total = p_fx_menor1 + p_fx_1a4 + p_fx_5a9 + p_fx_10a14 + p_fx_15mais,
+      fx_menor1 = pmax(round(casos * (p_fx_menor1 / p_fx_total)), 0),
+      fx_1a4 = pmax(round(casos * (p_fx_1a4 / p_fx_total)), 0),
+      fx_5a9 = pmax(round(casos * (p_fx_5a9 / p_fx_total)), 0),
+      fx_10a14 = pmax(round(casos * (p_fx_10a14 / p_fx_total)), 0),
+      fx_15mais = pmax(casos - fx_menor1 - fx_1a4 - fx_5a9 - fx_10a14, 0),
+      acao_educativa = rpois(n(), lambda = pmax(casos / 30, 0.2)),
+      treinamentos = rpois(n(), lambda = pmax(casos / 45, 0.1)),
+      coleta_material = rpois(n(), lambda = pmax(casos / 50, 0.1)),
+      encaminhamentos = rpois(n(), lambda = pmax(casos / 35, 0.1)),
       uvis = ifelse(
         normalize_key(municipio) == "sao paulo",
         sample(uvis_pool, n(), replace = TRUE),
@@ -638,7 +779,11 @@ generate_mock_data <- function() {
       ),
       incidencia = round((casos / populacao) * 100000, 2)
     ) %>%
-    select(ano, semana, drs, gve, municipio, uvis, casos, populacao, incidencia, surtos) %>%
+    select(
+      ano, semana, drs, gve, municipio, uvis, casos, populacao, incidencia, surtos,
+      sexo_masc, sexo_fem, fx_menor1, fx_1a4, fx_5a9, fx_10a14, fx_15mais,
+      acao_educativa, treinamentos, coleta_material, encaminhamentos
+    ) %>%
     arrange(ano, semana, drs, gve, municipio, uvis)
 
   dados

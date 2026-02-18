@@ -16,6 +16,7 @@ ensure_attached_package <- function(pkg) {
 
 ensure_attached_package("plotly")
 ensure_attached_package("leaflet")
+ensure_attached_package("DT")
 
 server <- function(input, output, session) {
   anos_ordenados <- sort(unique(dados_epidemiologicos$ano), decreasing = TRUE)
@@ -290,8 +291,14 @@ server <- function(input, output, session) {
       filter(ano == selected_year())
   })
 
+  dados_ano_referencia <- reactive({
+    ano_ref <- selected_year()
+    dados_filtrados_dimensoes() %>%
+      filter(ano == ano_ref)
+  })
+
   serie_semanal_atual <- reactive({
-    df <- dados_filtrados() %>%
+    df <- dados_ano_referencia() %>%
       group_by(semana) %>%
       summarise(casos = sum(casos, na.rm = TRUE), .groups = "drop")
 
@@ -390,12 +397,12 @@ server <- function(input, output, session) {
   })
 
   output$total_casos <- renderText({
-    df <- dados_filtrados()
+    df <- dados_ano_referencia()
     format(sum(df$casos, na.rm = TRUE), big.mark = ".", decimal.mark = ",")
   })
 
   output$incidencia_media <- renderText({
-    df <- dados_filtrados()
+    df <- dados_ano_referencia()
 
     if (nrow(df) == 0) {
       return("0,00")
@@ -656,7 +663,7 @@ server <- function(input, output, session) {
   })
 
   output$grafico_casos_gve <- renderPlotly({
-    df <- dados_filtrados() %>%
+    df <- dados_ano_referencia() %>%
       group_by(gve) %>%
       summarise(casos = sum(casos, na.rm = TRUE), .groups = "drop") %>%
       arrange(desc(casos))
@@ -680,6 +687,468 @@ server <- function(input, output, session) {
         paper_bgcolor = "white",
         xaxis = list(title = "GVE", tickangle = 35, showgrid = FALSE),
         yaxis = list(title = "Casos", showgrid = TRUE, gridcolor = "#e5e7eb")
+      )
+  })
+
+  modelo_tendencia <- reactive({
+    serie <- serie_semanal_atual() %>% arrange(semana)
+
+    if (nrow(serie) == 0) {
+      return(
+        list(
+          observado = tibble::tibble(semana = integer(), casos = numeric(), tendencia = numeric()),
+          previsao = tibble::tibble(semana = integer(), previsto = numeric()),
+          slope = 0,
+          semana_limite = 0
+        )
+      )
+    }
+
+    semanas_validas <- serie$semana[serie$casos > 0]
+    semana_limite <- if (length(semanas_validas) > 0) max(semanas_validas) else max(serie$semana)
+
+    observado <- serie %>%
+      filter(semana <= semana_limite)
+
+    if (nrow(observado) == 0) {
+      observado <- serie
+    }
+
+    if (nrow(observado) >= 8) {
+      ajuste_modelo <- tryCatch(
+        stats::loess(casos ~ semana, data = observado, span = 0.35, degree = 1, family = "symmetric"),
+        error = function(e) NULL
+      )
+      if (!is.null(ajuste_modelo)) {
+        observado$tendencia <- pmax(as.numeric(stats::predict(ajuste_modelo, newdata = observado)), 0)
+        observado$tendencia[!is.finite(observado$tendencia)] <- observado$casos[!is.finite(observado$tendencia)]
+      } else {
+        observado$tendencia <- observado$casos
+      }
+    } else if (nrow(observado) >= 2) {
+      ajuste_modelo <- stats::lm(casos ~ semana, data = observado)
+      observado$tendencia <- pmax(as.numeric(stats::predict(ajuste_modelo, newdata = observado)), 0)
+    } else {
+      observado$tendencia <- observado$casos
+    }
+
+    n_slope <- min(8, nrow(observado))
+    slope <- 0
+    if (n_slope >= 2) {
+      slope_model <- stats::lm(casos ~ semana, data = utils::tail(observado, n_slope))
+      slope <- as.numeric(coef(slope_model)[["semana"]])
+      if (!is.finite(slope)) {
+        slope <- 0
+      }
+    }
+
+    max_semana_previsao <- min(53, semana_limite + 8)
+    semanas_previsao <- if (semana_limite < 53) {
+      seq.int(semana_limite + 1, max_semana_previsao)
+    } else {
+      integer()
+    }
+    ultimo_tendencia <- dplyr::last(observado$tendencia)
+    if (!is.finite(ultimo_tendencia)) {
+      ultimo_tendencia <- dplyr::last(observado$casos)
+    }
+    previsao <- tibble::tibble(
+      semana = semanas_previsao,
+      previsto = if (length(semanas_previsao) > 0) {
+        pmax(ultimo_tendencia + slope * (semanas_previsao - semana_limite), 0)
+      } else {
+        numeric()
+      }
+    )
+
+    list(
+      observado = observado,
+      previsao = previsao,
+      slope = slope,
+      semana_limite = semana_limite
+    )
+  })
+
+  roll_mean <- function(x, k = 4) {
+    vapply(
+      seq_along(x),
+      function(i) {
+        idx <- seq.int(max(1, i - k + 1), i)
+        mean(x[idx], na.rm = TRUE)
+      },
+      numeric(1)
+    )
+  }
+
+  motor_alerta_ia <- reactive({
+    ano_ref <- selected_year()
+    serie_atual <- serie_semanal_atual() %>% arrange(semana)
+    tendencia <- modelo_tendencia()
+
+    historico <- dados_filtrados_dimensoes() %>%
+      filter(ano != ano_ref, ano != 2011) %>%
+      group_by(ano, semana) %>%
+      summarise(casos = sum(casos, na.rm = TRUE), .groups = "drop")
+
+    historico_stats <- if (nrow(historico) == 0) {
+      media_ref <- mean(serie_atual$casos, na.rm = TRUE)
+      dp_ref <- stats::sd(serie_atual$casos, na.rm = TRUE)
+      if (!is.finite(media_ref)) media_ref <- 0
+      if (!is.finite(dp_ref)) dp_ref <- 0
+      tibble::tibble(
+        semana = 1:53,
+        media_hist = media_ref,
+        dp_hist = dp_ref
+      )
+    } else {
+      historico %>%
+        group_by(semana) %>%
+        summarise(
+          media_hist = mean(casos, na.rm = TRUE),
+          dp_hist = stats::sd(casos, na.rm = TRUE),
+          .groups = "drop"
+        ) %>%
+        mutate(dp_hist = tidyr::replace_na(dp_hist, 0))
+    }
+
+    observado <- tibble::tibble(semana = 1:53) %>%
+      left_join(serie_atual, by = "semana") %>%
+      mutate(casos = tidyr::replace_na(casos, 0)) %>%
+      left_join(historico_stats, by = "semana") %>%
+      mutate(
+        media_hist = tidyr::replace_na(media_hist, 0),
+        dp_hist = tidyr::replace_na(dp_hist, 0),
+        zscore = ifelse(dp_hist > 0, (casos - media_hist) / dp_hist, 0),
+        media_movel4 = roll_mean(casos, k = 4),
+        media_movel4_prev = dplyr::lag(media_movel4, n = 4, default = dplyr::first(media_movel4)),
+        crescimento = ifelse(media_movel4_prev > 0, (media_movel4 - media_movel4_prev) / media_movel4_prev, 0),
+        crescimento = tidyr::replace_na(crescimento, 0),
+        z_norm = pmin(pmax(zscore / 3, -2), 2),
+        cresc_norm = pmin(pmax(crescimento, -1), 2),
+        score_ia = 1.1 * z_norm + 0.8 * cresc_norm,
+        prob_surto = stats::plogis(score_ia),
+        risco = dplyr::case_when(
+          prob_surto >= 0.85 ~ "CRITICO",
+          prob_surto >= 0.70 ~ "ALTO",
+          prob_surto >= 0.50 ~ "MODERADO",
+          TRUE ~ "BAIXO"
+        ),
+        alerta_previsto = prob_surto >= 0.70,
+        semana_fechada = semana <= tendencia$semana_limite
+      )
+
+    media_recente <- mean(observado$casos[observado$semana_fechada], na.rm = TRUE)
+    if (!is.finite(media_recente)) {
+      media_recente <- 1
+    }
+
+    tendencia_norm <- pmin(
+      pmax(tendencia$slope / pmax(media_recente, 1), -1),
+      2
+    )
+
+    futuro <- tendencia$previsao %>%
+      left_join(historico_stats, by = "semana") %>%
+      mutate(
+        media_hist = tidyr::replace_na(media_hist, 0),
+        dp_hist = tidyr::replace_na(dp_hist, 0),
+        zscore = ifelse(dp_hist > 0, (previsto - media_hist) / dp_hist, 0),
+        z_norm = pmin(pmax(zscore / 3, -2), 2),
+        score_ia = 1.1 * z_norm + 0.6 * tendencia_norm,
+        prob_surto = stats::plogis(score_ia),
+        risco = dplyr::case_when(
+          prob_surto >= 0.85 ~ "CRITICO",
+          prob_surto >= 0.70 ~ "ALTO",
+          prob_surto >= 0.50 ~ "MODERADO",
+          TRUE ~ "BAIXO"
+        ),
+        alerta_previsto = prob_surto >= 0.70
+      )
+
+    list(
+      observado = observado,
+      futuro = futuro,
+      semana_limite = tendencia$semana_limite
+    )
+  })
+
+  ia_resumo_atual <- reactive({
+    motor <- motor_alerta_ia()
+    observado <- motor$observado %>%
+      filter(semana_fechada)
+
+    if (nrow(observado) == 0) {
+      return(
+        list(
+          nivel = "SEM DADOS",
+          prob = 0,
+          semanas_criticas = 0,
+          mensagem = "Sem informação suficiente para predição."
+        )
+      )
+    }
+
+    ultima <- observado %>% arrange(desc(semana)) %>% slice(1)
+    semanas_criticas <- sum(motor$futuro$alerta_previsto, na.rm = TRUE)
+
+    mensagem <- if (semanas_criticas >= 3) {
+      "Reforçar ações imediatas e investigação ativa."
+    } else if (semanas_criticas >= 1) {
+      "Monitorar semanalmente com plano de resposta local."
+    } else {
+      "Manter vigilância de rotina e prevenção."
+    }
+
+    list(
+      nivel = as.character(ultima$risco),
+      prob = as.numeric(ultima$prob_surto),
+      semanas_criticas = as.integer(semanas_criticas),
+      mensagem = mensagem
+    )
+  })
+
+  output$risco_ia_nivel <- renderText({
+    ia_resumo_atual()$nivel
+  })
+
+  output$risco_ia_prob <- renderText({
+    paste0(round(ia_resumo_atual()$prob * 100, 1), "% de probabilidade")
+  })
+
+  output$semanas_criticas_previstas <- renderText({
+    as.character(ia_resumo_atual()$semanas_criticas)
+  })
+
+  output$resumo_tendencia_curta <- renderText({
+    ia_resumo_atual()$mensagem
+  })
+
+  output$grafico_tendencia <- renderPlotly({
+    modelo <- modelo_tendencia()
+
+    if (nrow(modelo$observado) == 0) {
+      return(empty_plotly("Sem dados para estimar tendência"))
+    }
+
+    p <- plot_ly() %>%
+      add_trace(
+        data = modelo$observado,
+        x = ~semana,
+        y = ~casos,
+        type = "scatter",
+        mode = "lines",
+        name = "Observado",
+        line = list(color = "#005ca9", width = 2.4)
+      ) %>%
+      add_trace(
+        data = modelo$observado,
+        x = ~semana,
+        y = ~tendencia,
+        type = "scatter",
+        mode = "lines",
+        name = "Tendência (LOESS)",
+        line = list(color = "#2e7d32", width = 2, dash = "dash")
+      )
+
+    if (nrow(modelo$previsao) > 0) {
+      p <- p %>%
+        add_trace(
+          data = modelo$previsao,
+          x = ~semana,
+          y = ~previsto,
+          type = "scatter",
+          mode = "lines",
+          name = "Projeção (8 semanas)",
+          line = list(color = "#ef6c00", width = 2.2, dash = "dot")
+        )
+    }
+
+    p %>%
+      layout(
+        hovermode = "x unified",
+        legend = list(orientation = "h", x = 0, y = 1.08),
+        margin = list(l = 55, r = 20, t = 10, b = 45),
+        plot_bgcolor = "rgba(245,245,245,0.5)",
+        paper_bgcolor = "white",
+        xaxis = list(title = "Semana epidemiológica", showgrid = TRUE, gridcolor = "#e5e7eb"),
+        yaxis = list(title = "Casos", showgrid = TRUE, gridcolor = "#e5e7eb")
+      )
+  })
+
+  output$grafico_alerta_ia <- renderPlotly({
+    motor <- motor_alerta_ia()
+    obs <- motor$observado %>% filter(semana_fechada)
+    fut <- motor$futuro
+
+    if (nrow(obs) == 0) {
+      return(empty_plotly("Sem dados para o motor de alerta preditivo"))
+    }
+
+    p <- plot_ly() %>%
+      add_trace(
+        data = obs,
+        x = ~semana,
+        y = ~prob_surto,
+        type = "scatter",
+        mode = "lines",
+        name = "Probabilidade observada",
+        line = list(color = "#6a1b9a", width = 2.4)
+      ) %>%
+      add_trace(
+        x = c(min(obs$semana), 53),
+        y = c(0.70, 0.70),
+        type = "scatter",
+        mode = "lines",
+        name = "Limiar de alerta (70%)",
+        line = list(color = "#d32f2f", dash = "dash", width = 1.7)
+      )
+
+    if (nrow(fut) > 0) {
+      p <- p %>%
+        add_trace(
+          data = fut,
+          x = ~semana,
+          y = ~prob_surto,
+          type = "scatter",
+          mode = "lines",
+          name = "Probabilidade prevista",
+          line = list(color = "#ef6c00", dash = "dot", width = 2.2)
+        )
+    }
+
+    p %>%
+      layout(
+        hovermode = "x unified",
+        legend = list(orientation = "h", x = 0, y = 1.10),
+        margin = list(l = 55, r = 20, t = 10, b = 45),
+        plot_bgcolor = "rgba(245,245,245,0.5)",
+        paper_bgcolor = "white",
+        xaxis = list(title = "Semana epidemiológica", showgrid = TRUE, gridcolor = "#e5e7eb"),
+        yaxis = list(
+          title = "Probabilidade de surto",
+          tickformat = ".0%",
+          range = c(0, 1),
+          showgrid = TRUE,
+          gridcolor = "#e5e7eb"
+        )
+      )
+  })
+
+  output$grafico_sexo <- renderPlotly({
+    df <- dados_ano_referencia()
+
+    if (nrow(df) == 0) {
+      return(empty_plotly("Sem dados de sexo para os filtros selecionados"))
+    }
+
+    total_masc <- sum(df$sexo_masc, na.rm = TRUE)
+    total_fem <- sum(df$sexo_fem, na.rm = TRUE)
+    total_casos <- sum(df$casos, na.rm = TRUE)
+    total_nao_info <- pmax(total_casos - total_masc - total_fem, 0)
+
+    sexo_df <- tibble::tibble(
+      sexo = c("Masculino", "Feminino", "Não informado"),
+      casos = c(total_masc, total_fem, total_nao_info)
+    ) %>%
+      filter(casos > 0)
+
+    if (nrow(sexo_df) == 0) {
+      return(empty_plotly("Sem registros de sexo no período selecionado"))
+    }
+
+    plot_ly(
+      sexo_df,
+      labels = ~sexo,
+      values = ~casos,
+      type = "pie",
+      hole = 0.45,
+      marker = list(colors = c("#1976d2", "#ec407a", "#90a4ae"))
+    ) %>%
+      layout(
+        margin = list(l = 20, r = 20, t = 10, b = 10),
+        showlegend = TRUE,
+        legend = list(orientation = "h", x = 0, y = -0.05),
+        paper_bgcolor = "white"
+      )
+  })
+
+  output$grafico_faixa_etaria <- renderPlotly({
+    df <- dados_ano_referencia()
+
+    if (nrow(df) == 0) {
+      return(empty_plotly("Sem dados de faixa etária para os filtros selecionados"))
+    }
+
+    faixa_df <- tibble::tibble(
+      faixa = c("< 1 ano", "1 a 4", "5 a 9", "10 a 14", "15+"),
+      casos = c(
+        sum(df$fx_menor1, na.rm = TRUE),
+        sum(df$fx_1a4, na.rm = TRUE),
+        sum(df$fx_5a9, na.rm = TRUE),
+        sum(df$fx_10a14, na.rm = TRUE),
+        sum(df$fx_15mais, na.rm = TRUE)
+      )
+    )
+
+    if (sum(faixa_df$casos, na.rm = TRUE) <= 0) {
+      return(empty_plotly("Sem registros de faixa etária no período selecionado"))
+    }
+
+    plot_ly(
+      faixa_df,
+      x = ~faixa,
+      y = ~casos,
+      type = "bar",
+      marker = list(color = c("#90caf9", "#64b5f6", "#42a5f5", "#1e88e5", "#0d47a1")),
+      name = "Casos"
+    ) %>%
+      layout(
+        showlegend = FALSE,
+        margin = list(l = 55, r = 20, t = 10, b = 45),
+        plot_bgcolor = "rgba(245,245,245,0.5)",
+        paper_bgcolor = "white",
+        xaxis = list(title = "Faixa etária", showgrid = FALSE),
+        yaxis = list(title = "Casos", showgrid = TRUE, gridcolor = "#e5e7eb")
+      )
+  })
+
+  output$grafico_acoes_treinamentos <- renderPlotly({
+    df <- dados_ano_referencia()
+
+    if (nrow(df) == 0) {
+      return(empty_plotly("Sem dados de ações para os filtros selecionados"))
+    }
+
+    acoes_df <- tibble::tibble(
+      acao = c("Ações educativas", "Treinamentos", "Coleta de material", "Encaminhamentos"),
+      quantidade = c(
+        sum(df$acao_educativa, na.rm = TRUE),
+        sum(df$treinamentos, na.rm = TRUE),
+        sum(df$coleta_material, na.rm = TRUE),
+        sum(df$encaminhamentos, na.rm = TRUE)
+      )
+    )
+
+    if (sum(acoes_df$quantidade, na.rm = TRUE) <= 0) {
+      return(empty_plotly("Sem registros de ações no período selecionado"))
+    }
+
+    plot_ly(
+      acoes_df,
+      x = ~reorder(acao, quantidade),
+      y = ~quantidade,
+      type = "bar",
+      orientation = "v",
+      marker = list(color = c("#43a047", "#00897b", "#7cb342", "#5e35b1")),
+      name = "Quantidade"
+    ) %>%
+      layout(
+        showlegend = FALSE,
+        margin = list(l = 55, r = 20, t = 10, b = 90),
+        plot_bgcolor = "rgba(245,245,245,0.5)",
+        paper_bgcolor = "white",
+        xaxis = list(title = "Tipo de ação", tickangle = 20, showgrid = FALSE),
+        yaxis = list(title = "Quantidade", showgrid = TRUE, gridcolor = "#e5e7eb")
       )
   })
 
@@ -720,7 +1189,7 @@ server <- function(input, output, session) {
   })
 
   resumo_municipios <- reactive({
-    df <- dados_filtrados()
+    df <- dados_ano_referencia()
 
     if (nrow(df) == 0) {
       return(
@@ -753,43 +1222,119 @@ server <- function(input, output, session) {
       arrange(desc(incidencia), desc(casos), municipio)
   })
 
-  output$tabela_municipios <- DT::renderDT({
-    resumo <- resumo_municipios()
+  tabela_operacional_municipios <- reactive({
+    df <- dados_ano_referencia()
 
-    tabela <- if (nrow(resumo) == 0) {
-      tibble::tibble(
-        Município = character(),
-        Casos = integer(),
-        `Incidência (/100 mil)` = numeric(),
-        `Situação de surto` = character(),
-        `Faixa de incidência` = character()
-      )
-    } else {
-      resumo %>%
-        transmute(
-          Município = municipio,
-          Casos = as.integer(round(casos)),
-          `Incidência (/100 mil)` = round(incidencia, 2),
-          `Situação de surto` = status_surto,
-          `Faixa de incidência` = faixa_incidencia
+    if (nrow(df) == 0) {
+      return(
+        tibble::tibble(
+          gve = character(),
+          municipio = character(),
+          ano = integer(),
+          populacao = numeric(),
+          total = numeric(),
+          incidencia = numeric(),
+          alerta = character(),
+          alerta_flag = integer()
         )
+      )
     }
+
+    resumo <- df %>%
+      group_by(gve, municipio, ano) %>%
+      summarise(
+        populacao = max(populacao, na.rm = TRUE),
+        total = sum(casos, na.rm = TRUE),
+        surtos = sum(surtos, na.rm = TRUE),
+        .groups = "drop"
+      ) %>%
+      mutate(
+        populacao = ifelse(is.infinite(populacao) | populacao <= 0, NA_real_, populacao),
+        incidencia = ifelse(populacao > 0, (total / populacao) * 100000, NA_real_)
+      )
+
+    limiar_alerta <- suppressWarnings(stats::quantile(
+      resumo$incidencia[is.finite(resumo$incidencia) & resumo$incidencia > 0],
+      probs = 0.75,
+      na.rm = TRUE
+    ))
+
+    if (!is.finite(limiar_alerta)) {
+      limiar_alerta <- 0
+    }
+
+    resumo %>%
+      mutate(
+        alerta_flag = ifelse(surtos > 0 | incidencia >= limiar_alerta, 1L, 0L),
+        alerta = ifelse(alerta_flag == 1L, "ALERTA", "ESTÁVEL")
+      ) %>%
+      arrange(desc(alerta_flag), desc(incidencia), desc(total), municipio)
+  })
+
+  output$tabela_municipios <- DT::renderDT({
+    tabela_base <- tabela_operacional_municipios()
+
+    tabela <- tabela_base %>%
+      transmute(
+        GVE = toupper(gve),
+        MUNICIPIO = toupper(municipio),
+        ANO = as.integer(ano),
+        POPULACAO = populacao,
+        TOTAL = total,
+        INCIDENCIA = round(incidencia, 2),
+        ALERTA = alerta,
+        alerta_flag = alerta_flag
+      )
 
     DT::datatable(
       tabela,
       rownames = FALSE,
+      class = "compact stripe hover",
       options = list(
-        pageLength = 15,
-        lengthMenu = c(10, 15, 25, 50),
+        pageLength = 12,
+        lengthMenu = c(12, 25, 50, 100),
         autoWidth = TRUE,
-        order = list(list(2, "desc")),
-        dom = "tip"
+        order = list(list(7, "desc"), list(5, "desc")),
+        dom = "tip",
+        columnDefs = list(
+          list(visible = FALSE, targets = 7)
+        )
       )
-    )
+    ) %>%
+      DT::formatCurrency(
+        columns = c("POPULACAO", "TOTAL"),
+        currency = "",
+        interval = 3,
+        mark = ".",
+        dec.mark = ",",
+        digits = 0
+      ) %>%
+      DT::formatCurrency(
+        columns = c("INCIDENCIA"),
+        currency = "",
+        interval = 3,
+        mark = ".",
+        dec.mark = ",",
+        digits = 2
+      ) %>%
+      DT::formatStyle(
+        "INCIDENCIA",
+        valueColumns = "alerta_flag",
+        backgroundColor = DT::styleEqual(c(1, 0), c("#f8d7da", "#d4edda")),
+        color = DT::styleEqual(c(1, 0), c("#7f1d1d", "#14532d")),
+        fontWeight = "700"
+      ) %>%
+      DT::formatStyle(
+        "ALERTA",
+        valueColumns = "alerta_flag",
+        backgroundColor = DT::styleEqual(c(1, 0), c("#f8d7da", "#d4edda")),
+        color = DT::styleEqual(c(1, 0), c("#7f1d1d", "#14532d")),
+        fontWeight = "700"
+      )
   }, server = FALSE)
 
   dados_mapa_nivel <- reactive({
-    df <- dados_filtrados()
+    df <- dados_ano_referencia()
     nivel <- nivel_mapa_atual()
 
     if (nrow(df) == 0) {
@@ -876,7 +1421,7 @@ server <- function(input, output, session) {
 
   pontos_base_mapa <- reactive({
     nivel <- nivel_mapa_atual()
-    df_filtrado <- dados_filtrados()
+    df_filtrado <- dados_ano_referencia()
 
     base <- df_filtrado %>%
       distinct(drs, gve, municipio, populacao) %>%

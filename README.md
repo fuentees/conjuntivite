@@ -16,6 +16,10 @@ Aplicativo Shiny para monitoramento semanal de conjuntivites com interface moder
   2. Canal endêmico (média histórica + limites + ano selecionado, com referência sem 2011)
   3. Diagrama de controle (base de 10 anos, excluindo 2011; CL/UCL/LCL com 3DP)
   4. Casos por GVE
+  5. Modelo de tendência semanal com projeção curta
+  6. Motor preditivo de risco de surto (IA explicável)
+  7. Distribuição por sexo e faixa etária
+  8. Ações/treinamentos realizados
 - Mapa interativo territorial (leaflet):
   - Níveis: Município, GVE e DRS
   - Vinculado aos filtros de Ano, DRS, GVE e Município
@@ -23,10 +27,10 @@ Aplicativo Shiny para monitoramento semanal de conjuntivites com interface moder
   - Prioriza shapefile local por nível
   - Fallback automático para geobr (município) ou marcadores (sem shape)
 - Tabela interativa de municípios:
-  - Total de casos
-  - Incidência por 100 mil habitantes
-  - Situação de surto (Em surto / Sem surto)
-  - Faixa de incidência (sincronizada com as cores do mapa)
+  - GVE, município, ano, população, total e incidência
+  - Formatação numérica brasileira (milhares com `.`)
+  - Alerta visual em verde/vermelho
+  - Sincronização com o mapa por incidência
 
 ## Fonte de dados
 
@@ -48,13 +52,18 @@ export OFTALMO_ALLOW_MOCK="true"
 - `dominio_drs` (DRS, quando disponível)
 - `TotalCaso` (casos)
 - `NuSurto` e/ou `Surto` (informações de surto)
+- `SexMasc` e `SexFem` (perfil por sexo)
+- `FxMenorUmAno`, `FxUmQuatro`, `FxCincoNove`, `FxDezQuatorze`, `FxQuizeOuMais` (faixa etária)
+- `NuAcaoEducativa`, `NuTreinamento`, `NuColetaMaterialBio`, `NuEncamimento` (ações)
 
 Também são reconhecidos automaticamente formatos comuns da sua base, como:
 `GVE_NOME`, `DRS_NOME`, `ANO`, `SemEpidemio`.
 
 Esses campos são transformados para a estrutura interna:
 
-`ano`, `semana`, `drs`, `gve`, `municipio`, `casos`, `populacao`, `incidencia`, `surtos`
+`ano`, `semana`, `drs`, `gve`, `municipio`, `casos`, `populacao`, `incidencia`, `surtos`,
+`sexo_masc`, `sexo_fem`, `fx_menor1`, `fx_1a4`, `fx_5a9`, `fx_10a14`, `fx_15mais`,
+`acao_educativa`, `treinamentos`, `coleta_material`, `encaminhamentos`
 
 ## Configuração de conexão (opcional por variável de ambiente)
 
@@ -79,6 +88,18 @@ export OFTALMO_COL_CASOS="nome_real_coluna_casos"
 export OFTALMO_COL_DATA="nome_real_coluna_data_notificacao"
 export OFTALMO_COL_ANO="nome_real_coluna_ano"
 export OFTALMO_COL_SEMANA="nome_real_coluna_semana_epidemiologica"
+export OFTALMO_COL_SEXO_MASC="nome_real_coluna_sexo_masculino"
+export OFTALMO_COL_SEXO_FEM="nome_real_coluna_sexo_feminino"
+export OFTALMO_COL_FX_MENOR1="nome_real_coluna_fx_menor_1"
+export OFTALMO_COL_FX_1A4="nome_real_coluna_fx_1_4"
+export OFTALMO_COL_FX_5A9="nome_real_coluna_fx_5_9"
+export OFTALMO_COL_FX_10A14="nome_real_coluna_fx_10_14"
+export OFTALMO_COL_FX_15MAIS="nome_real_coluna_fx_15_mais"
+export OFTALMO_COL_ACAO_EDUCATIVA="nome_real_coluna_acao_educativa"
+export OFTALMO_COL_TREINAMENTO="nome_real_coluna_treinamento"
+export OFTALMO_COL_COLETA_MATERIAL="nome_real_coluna_coleta_material"
+export OFTALMO_COL_ENCAMINHAMENTO="nome_real_coluna_encaminhamento"
+export OFTALMO_COL_MEDIDA_ADOTADA="nome_real_coluna_medida_adotada"
 ```
 
 ## Instalação
