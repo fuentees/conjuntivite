@@ -80,6 +80,63 @@ server <- function(input, output, session) {
     all_municipio_choices <- "Não informado"
   }
 
+  is_sao_paulo_selected <- reactive({
+    !is.null(input$filtro_municipio) &&
+      input$filtro_municipio != "Todos" &&
+      normalize_key(input$filtro_municipio) == "sao paulo"
+  })
+
+  uvis_choices_for_context <- reactive({
+    if (!is_sao_paulo_selected()) {
+      return(character())
+    }
+
+    df <- if (identical(input$filtro_ano, "Todos")) {
+      dados_epidemiologicos
+    } else {
+      dados_epidemiologicos %>% filter(ano == selected_year())
+    }
+
+    if (!is.null(input$filtro_drs) && input$filtro_drs != "Todas") {
+      df <- df %>% filter(drs == input$filtro_drs)
+    }
+
+    if (!is.null(input$filtro_gve) && input$filtro_gve != "Todas") {
+      df <- df %>% filter(gve == input$filtro_gve)
+    }
+
+    if (!is.null(input$filtro_municipio) && input$filtro_municipio != "Todos") {
+      df <- df %>% filter(municipio == input$filtro_municipio)
+    }
+
+    clean_choice_values(df$uvis)
+  })
+
+  output$uvis_filter_ui <- renderUI({
+    if (!is_sao_paulo_selected()) {
+      return(NULL)
+    }
+
+    uvis_choices <- uvis_choices_for_context()
+    if (length(uvis_choices) == 0) {
+      uvis_choices <- "Não informado"
+    }
+
+    selected_uvis <- if (!is.null(input$filtro_uvis) && input$filtro_uvis %in% c("Todas", uvis_choices)) {
+      input$filtro_uvis
+    } else {
+      "Todas"
+    }
+
+    selectInput(
+      "filtro_uvis",
+      label = "UVIS (somente Município de São Paulo)",
+      choices = c("Todas", uvis_choices),
+      selected = selected_uvis,
+      selectize = FALSE
+    )
+  })
+
   if (identical(dados_fonte, "mock")) {
     session$onFlushed(
       function() {
@@ -195,6 +252,9 @@ server <- function(input, output, session) {
     updateSelectInput(session, "filtro_drs", selected = "Todas")
     updateSelectInput(session, "filtro_gve", selected = "Todas")
     updateSelectInput(session, "filtro_municipio", selected = "Todos")
+    if (!is.null(input$filtro_uvis)) {
+      updateSelectInput(session, "filtro_uvis", selected = "Todas")
+    }
   })
 
   dados_filtrados_dimensoes <- reactive({
@@ -211,6 +271,10 @@ server <- function(input, output, session) {
 
     if (!is.null(input$filtro_municipio) && input$filtro_municipio != "Todos") {
       df <- df %>% filter(municipio == input$filtro_municipio)
+    }
+
+    if (!is.null(input$filtro_uvis) && input$filtro_uvis != "Todas" && is_sao_paulo_selected()) {
+      df <- df %>% filter(uvis == input$filtro_uvis)
     }
 
     df

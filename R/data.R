@@ -488,6 +488,12 @@ prepare_oftalmo_dataset <- function(raw_data) {
     candidates = c("GVE_NOME", "gve_nome", "dominio_gve", "gve", "gve_numero"),
     regex_candidates = c("gve", "grupo.*vigil", "vigilancia.*epid")
   )
+  uvis_col <- pick_column_with_override(
+    raw_data,
+    override_env_var = "OFTALMO_COL_UVIS",
+    candidates = c("UVIS", "uvis"),
+    regex_candidates = c("uvis")
+  )
   drs_col <- pick_column_with_override(
     raw_data,
     override_env_var = "OFTALMO_COL_DRS",
@@ -538,6 +544,8 @@ prepare_oftalmo_dataset <- function(raw_data) {
       semana_registro = if (!is.null(semana_col)) suppressWarnings(as.integer(.data[[semana_col]])) else NA_integer_,
       municipio = sanitize_dimension_values(.data[[municipio_col]]),
       gve = sanitize_dimension_values(.data[[gve_col]]),
+      uvis = if (!is.null(uvis_col)) sanitize_dimension_values(.data[[uvis_col]], default = NA_character_) else NA_character_,
+      uvis = ifelse(normalize_key(municipio) == "sao paulo", uvis, NA_character_),
       drs = if (!is.null(drs_col)) sanitize_dimension_values(.data[[drs_col]]) else "Não informado",
       drs = ifelse(
         drs == "Não informado",
@@ -562,7 +570,7 @@ prepare_oftalmo_dataset <- function(raw_data) {
       surtos = surto_n + surto_flag
     ) %>%
     filter(!is.na(ano), !is.na(semana)) %>%
-    group_by(ano, semana, drs, gve, municipio, populacao) %>%
+    group_by(ano, semana, drs, gve, municipio, uvis, populacao) %>%
     summarise(
       casos = sum(casos, na.rm = TRUE),
       surtos = sum(surtos, na.rm = TRUE),
@@ -571,7 +579,7 @@ prepare_oftalmo_dataset <- function(raw_data) {
     mutate(
       incidencia = ifelse(populacao > 0, round((casos / populacao) * 100000, 2), NA_real_)
     ) %>%
-    arrange(ano, semana, drs, gve, municipio)
+    arrange(ano, semana, drs, gve, municipio, uvis)
 
   if (nrow(df) == 0) {
     return(NULL)
@@ -581,6 +589,19 @@ prepare_oftalmo_dataset <- function(raw_data) {
 }
 
 generate_mock_data <- function() {
+  uvis_pool <- c(
+    "UVIS Sé",
+    "UVIS Mooca",
+    "UVIS Butantã",
+    "UVIS Lapa/Pinheiros",
+    "UVIS Vila Mariana/Jabaquara",
+    "UVIS Freguesia do Ó/Brasilândia",
+    "UVIS Penha",
+    "UVIS Santana/Tucuruvi/Jaçanã/Tremembé",
+    "UVIS Ermelino Matarazzo/São Miguel",
+    "UVIS Cidade Tiradentes/Guaianases"
+  )
+
   combinacoes <- lapply(names(drs_gve_mapping), function(drs_atual) {
     gves <- drs_gve_mapping[[drs_atual]]
 
@@ -610,10 +631,15 @@ generate_mock_data <- function() {
       casos = rpois(n(), lambda = lambda),
       populacao = infer_population(municipio),
       surtos = ifelse(casos > quantile(casos, 0.9, na.rm = TRUE), 1, 0),
+      uvis = ifelse(
+        normalize_key(municipio) == "sao paulo",
+        sample(uvis_pool, n(), replace = TRUE),
+        NA_character_
+      ),
       incidencia = round((casos / populacao) * 100000, 2)
     ) %>%
-    select(ano, semana, drs, gve, municipio, casos, populacao, incidencia, surtos) %>%
-    arrange(ano, semana, drs, gve, municipio)
+    select(ano, semana, drs, gve, municipio, uvis, casos, populacao, incidencia, surtos) %>%
+    arrange(ano, semana, drs, gve, municipio, uvis)
 
   dados
 }

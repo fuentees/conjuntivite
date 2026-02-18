@@ -222,6 +222,7 @@ ui <- tagList(
                 )
               )
             ),
+            uiOutput("uvis_filter_ui"),
             div(
               class = "d-flex justify-content-end mt-1",
               span(textOutput("fonte_dados", inline = TRUE), class = "text-chip")
