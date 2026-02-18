@@ -753,38 +753,40 @@ server <- function(input, output, session) {
       arrange(desc(incidencia), desc(casos), municipio)
   })
 
-  output$tabela_municipios <- renderDataTable({
+  output$tabela_municipios <- DT::renderDT({
     resumo <- resumo_municipios()
 
-    if (nrow(resumo) == 0) {
-      return(
-        tibble::tibble(
-          Município = character(),
-          Casos = integer(),
-          `Incidência (/100 mil)` = numeric(),
-          `Situação de surto` = character(),
-          `Faixa de incidência` = character()
-        )
+    tabela <- if (nrow(resumo) == 0) {
+      tibble::tibble(
+        Município = character(),
+        Casos = integer(),
+        `Incidência (/100 mil)` = numeric(),
+        `Situação de surto` = character(),
+        `Faixa de incidência` = character()
       )
+    } else {
+      resumo %>%
+        transmute(
+          Município = municipio,
+          Casos = as.integer(round(casos)),
+          `Incidência (/100 mil)` = round(incidencia, 2),
+          `Situação de surto` = status_surto,
+          `Faixa de incidência` = faixa_incidencia
+        )
     }
 
-    resumo %>%
-      transmute(
-        Município = municipio,
-        Casos = as.integer(round(casos)),
-        `Incidência (/100 mil)` = round(incidencia, 2),
-        `Situação de surto` = status_surto,
-        `Faixa de incidência` = faixa_incidencia
+    DT::datatable(
+      tabela,
+      rownames = FALSE,
+      options = list(
+        pageLength = 15,
+        lengthMenu = c(10, 15, 25, 50),
+        autoWidth = TRUE,
+        order = list(list(2, "desc")),
+        dom = "tip"
       )
-  },
-  rownames = FALSE,
-  options = list(
-    pageLength = 15,
-    lengthMenu = c(10, 15, 25, 50),
-    autoWidth = TRUE,
-    order = list(list(2, "desc")),
-    dom = "tip"
-  ))
+    )
+  }, server = FALSE)
 
   dados_mapa_nivel <- reactive({
     df <- dados_filtrados()

@@ -86,7 +86,7 @@ export OFTALMO_COL_SEMANA="nome_real_coluna_semana_epidemiologica"
 ```r
 install.packages(c(
   "shiny", "bslib", "dplyr", "plotly", "leaflet",
-  "lubridate", "tidyr", "DBI", "RMariaDB", "geobr", "sf"
+  "lubridate", "tidyr", "DT", "DBI", "RMariaDB", "geobr", "sf"
 ))
 
 shiny::runApp(".")

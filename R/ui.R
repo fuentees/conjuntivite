@@ -17,6 +17,7 @@ ensure_attached_package <- function(pkg) {
 ensure_attached_package("bslib")
 ensure_attached_package("plotly")
 ensure_attached_package("leaflet")
+ensure_attached_package("DT")
 
 custom_theme <- bs_theme(
   version = 5,
@@ -322,7 +323,7 @@ ui <- tagList(
           class = "custom-card",
           card_header("Tabela de municípios — casos, incidência e situação de surto"),
           card_body(
-            dataTableOutput("tabela_municipios")
+            DT::DTOutput("tabela_municipios")
           ),
           full_screen = TRUE
         )
