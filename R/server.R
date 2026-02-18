@@ -19,7 +19,7 @@ ensure_attached_package("leaflet")
 
 server <- function(input, output, session) {
   anos_ordenados <- sort(unique(dados_epidemiologicos$ano), decreasing = TRUE)
-  ano_padrao <- if (length(anos_ordenados) > 0) anos_ordenados[1] else as.integer(format(Sys.Date(), "%Y"))
+  ano_padrao <- "Todos"
 
   empty_plotly <- function(message) {
     plotly::plot_ly() %>%
@@ -39,6 +39,17 @@ server <- function(input, output, session) {
         paper_bgcolor = "white"
       )
   }
+
+  selected_year <- reactive({
+    if (is.null(input$filtro_ano) || identical(input$filtro_ano, "Todos")) {
+      if (length(anos_ordenados) > 0) {
+        return(as.integer(anos_ordenados[1]))
+      }
+      return(as.integer(format(Sys.Date(), "%Y")))
+    }
+
+    suppressWarnings(as.integer(input$filtro_ano))
+  })
 
   output$fonte_dados <- renderText({
     if (identical(dados_fonte, "database")) {
@@ -84,8 +95,11 @@ server <- function(input, output, session) {
 
   observeEvent(input$filtro_ano, {
     req(input$filtro_ano)
-    df_ano <- dados_epidemiologicos %>%
-      filter(ano == as.integer(input$filtro_ano))
+    df_ano <- if (identical(input$filtro_ano, "Todos")) {
+      dados_epidemiologicos
+    } else {
+      dados_epidemiologicos %>% filter(ano == selected_year())
+    }
 
     drs_choices <- clean_choice_values(df_ano$drs)
     if (length(drs_choices) == 0) {
@@ -104,7 +118,11 @@ server <- function(input, output, session) {
 
   observeEvent(input$filtro_drs, {
     req(input$filtro_ano)
-    df_ano <- dados_epidemiologicos %>% filter(ano == as.integer(input$filtro_ano))
+    df_ano <- if (identical(input$filtro_ano, "Todos")) {
+      dados_epidemiologicos
+    } else {
+      dados_epidemiologicos %>% filter(ano == selected_year())
+    }
     df <- df_ano
 
     if (!is.null(input$filtro_drs) && input$filtro_drs != "Todas") {
@@ -136,7 +154,11 @@ server <- function(input, output, session) {
 
   observeEvent(input$filtro_gve, {
     req(input$filtro_ano)
-    df_ano <- dados_epidemiologicos %>% filter(ano == as.integer(input$filtro_ano))
+    df_ano <- if (identical(input$filtro_ano, "Todos")) {
+      dados_epidemiologicos
+    } else {
+      dados_epidemiologicos %>% filter(ano == selected_year())
+    }
     df <- df_ano
 
     if (!is.null(input$filtro_drs) && input$filtro_drs != "Todas") {
@@ -196,8 +218,12 @@ server <- function(input, output, session) {
 
   dados_filtrados <- reactive({
     req(input$filtro_ano)
+    if (identical(input$filtro_ano, "Todos")) {
+      return(dados_filtrados_dimensoes())
+    }
+
     dados_filtrados_dimensoes() %>%
-      filter(ano == as.integer(input$filtro_ano))
+      filter(ano == selected_year())
   })
 
   serie_semanal_atual <- reactive({
@@ -226,7 +252,7 @@ server <- function(input, output, session) {
       ))
     }
 
-    ano_sel <- as.integer(input$filtro_ano)
+    ano_sel <- selected_year()
     historico_base <- df %>% filter(ano < ano_sel)
     if (nrow(historico_base) == 0) {
       historico_base <- df %>% filter(ano != ano_sel)
@@ -397,7 +423,7 @@ server <- function(input, output, session) {
         y = ~casos,
         type = "scatter",
         mode = "lines+markers",
-        name = as.character(input$filtro_ano),
+        name = paste0("Ano selecionado: ", selected_year()),
         line = list(color = "#005ca9", width = 2.5),
         marker = list(size = 5)
       ) %>%
@@ -412,27 +438,80 @@ server <- function(input, output, session) {
       )
   })
 
+  diagrama_controle_10anos <- reactive({
+    ano_ref <- selected_year()
+    req(!is.na(ano_ref))
+
+    df_base <- dados_filtrados_dimensoes() %>%
+      filter(ano != 2011)
+
+    anos_janela <- seq.int(ano_ref - 9, ano_ref)
+    df_janela <- df_base %>%
+      filter(ano %in% anos_janela)
+
+    if (nrow(df_janela) == 0) {
+      df_janela <- df_base %>% filter(ano <= ano_ref)
+    }
+
+    if (nrow(df_janela) == 0) {
+      return(
+        tibble::tibble(
+          semana = 1:53,
+          casos = 0,
+          CL = 0,
+          UCL = 0,
+          LCL = 0,
+          acima_ucl = FALSE
+        )
+      )
+    }
+
+    serie_ano_semana <- df_janela %>%
+      group_by(ano, semana) %>%
+      summarise(casos = sum(casos, na.rm = TRUE), .groups = "drop")
+
+    serie_ano_ref <- serie_ano_semana %>%
+      filter(ano == ano_ref) %>%
+      group_by(semana) %>%
+      summarise(casos = sum(casos, na.rm = TRUE), .groups = "drop")
+
+    serie_historica <- serie_ano_semana %>% filter(ano != ano_ref)
+    if (nrow(serie_historica) == 0) {
+      serie_historica <- serie_ano_semana
+    }
+
+    limites <- serie_historica %>%
+      group_by(semana) %>%
+      summarise(
+        CL = mean(casos, na.rm = TRUE),
+        DP = sd(casos, na.rm = TRUE),
+        .groups = "drop"
+      ) %>%
+      mutate(
+        DP = tidyr::replace_na(DP, 0),
+        UCL = CL + 3 * DP,
+        LCL = pmax(CL - 3 * DP, 0)
+      ) %>%
+      select(semana, CL, UCL, LCL)
+
+    tibble::tibble(semana = 1:53) %>%
+      left_join(serie_ano_ref, by = "semana") %>%
+      mutate(casos = tidyr::replace_na(casos, 0)) %>%
+      left_join(limites, by = "semana") %>%
+      mutate(
+        CL = tidyr::replace_na(CL, 0),
+        UCL = tidyr::replace_na(UCL, 0),
+        LCL = tidyr::replace_na(LCL, 0),
+        acima_ucl = casos > UCL
+      )
+  })
+
   output$grafico_diagrama_controle <- renderPlotly({
-    serie <- serie_semanal_atual()
+    serie <- diagrama_controle_10anos()
 
     if (nrow(serie) == 0) {
       return(empty_plotly("Sem dados para o diagrama de controle"))
     }
-
-    media <- mean(serie$casos, na.rm = TRUE)
-    desvio <- sd(serie$casos, na.rm = TRUE)
-    desvio <- ifelse(is.na(desvio), 0, desvio)
-
-    limite_sup <- media + 3 * desvio
-    limite_inf <- pmax(media - 3 * desvio, 0)
-
-    serie <- serie %>%
-      mutate(
-        CL = media,
-        UCL = limite_sup,
-        LCL = limite_inf,
-        acima_ucl = casos > UCL
-      )
 
     plot_ly(
       serie,
@@ -483,7 +562,20 @@ server <- function(input, output, session) {
         plot_bgcolor = "rgba(245,245,245,0.5)",
         paper_bgcolor = "white",
         xaxis = list(title = "Semana epidemiológica", showgrid = TRUE, gridcolor = "#e5e7eb"),
-        yaxis = list(title = "Casos", showgrid = TRUE, gridcolor = "#e5e7eb")
+        yaxis = list(title = "Casos", showgrid = TRUE, gridcolor = "#e5e7eb"),
+        annotations = list(
+          list(
+            x = 0.01,
+            y = 1.14,
+            xref = "paper",
+            yref = "paper",
+            xanchor = "left",
+            yanchor = "bottom",
+            text = paste0("Base histórica: últimos 10 anos (exceto 2011) | Ano exibido: ", selected_year()),
+            showarrow = FALSE,
+            font = list(size = 11, color = "#52606d")
+          )
+        )
       )
   })
 

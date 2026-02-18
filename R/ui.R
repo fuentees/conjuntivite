@@ -40,6 +40,8 @@ anos_disponiveis <- sort(unique(dados_epidemiologicos$ano), decreasing = TRUE)
 if (length(anos_disponiveis) == 0) {
   anos_disponiveis <- year(Sys.Date())
 }
+drs_disponiveis <- sort(unique(as.character(dados_epidemiologicos$drs)))
+drs_disponiveis <- drs_disponiveis[!is.na(drs_disponiveis) & trimws(drs_disponiveis) != "" & tolower(drs_disponiveis) != "na"]
 
 banner_topo_src <- if (file.exists(file.path("www", "banner_governo_sp.png"))) {
   "banner_governo_sp.png"
@@ -185,13 +187,13 @@ ui <- tagList(
               selectInput(
                 "filtro_ano",
                 label = "Ano",
-                choices = anos_disponiveis,
-                selected = anos_disponiveis[1]
+                choices = c("Todos", as.character(anos_disponiveis)),
+                selected = "Todos"
               ),
               selectInput(
                 "filtro_drs",
                 label = "DRS",
-                choices = c("Todas", sort(unique(dados_epidemiologicos$drs)))
+                choices = c("Todas", drs_disponiveis)
               ),
               selectInput(
                 "filtro_gve",
@@ -274,7 +276,7 @@ ui <- tagList(
           col_widths = c(6, 6),
           card(
             class = "custom-card",
-            card_header("Diagrama de controle (CL, UCL e LCL)"),
+            card_header("Diagrama de controle (10 anos, exclui 2011)"),
             plotlyOutput("grafico_diagrama_controle", height = "350px"),
             full_screen = TRUE
           ),
