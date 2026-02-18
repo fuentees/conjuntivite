@@ -44,7 +44,7 @@ ui <- tagList(
       ),
       div(
         div("Painel de Vigilância Epidemiológica", style = "font-weight: 700; line-height: 1.1;"),
-        small("Conjuntivites", class = "text-muted")
+        tags$small("Conjuntivites", class = "text-muted")
       )
     ),
     bg = "#ffffff",
