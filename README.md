@@ -19,8 +19,14 @@ Aplicativo Shiny para monitoramento semanal de conjuntivites com interface moder
 - Mapa interativo territorial (leaflet):
   - Níveis: Município, GVE e DRS
   - Vinculado aos filtros de Ano, DRS, GVE e Município
+  - Cores por faixa de incidência (derivadas da tabela de municípios)
   - Prioriza shapefile local por nível
   - Fallback automático para geobr (município) ou marcadores (sem shape)
+- Tabela interativa de municípios:
+  - Total de casos
+  - Incidência por 100 mil habitantes
+  - Situação de surto (Em surto / Sem surto)
+  - Faixa de incidência (sincronizada com as cores do mapa)
 
 ## Fonte de dados
 

@@ -316,6 +316,15 @@ ui <- tagList(
             leafletOutput("mapa", height = "620px")
           ),
           full_screen = TRUE
+        ),
+        br(),
+        card(
+          class = "custom-card",
+          card_header("Tabela de municípios — casos, incidência e situação de surto"),
+          card_body(
+            dataTableOutput("tabela_municipios")
+          ),
+          full_screen = TRUE
         )
       )
     )

@@ -691,6 +691,26 @@ server <- function(input, output, session) {
     stats::weighted.mean(x[valid], w[valid], na.rm = TRUE)
   }
 
+  incidencia_faixas <- c(
+    "Sem dados",
+    "Muito baixa (<50)",
+    "Baixa (50 a <100)",
+    "Moderada (100 a <300)",
+    "Alta (300 a <500)",
+    "Muito alta (>=500)"
+  )
+
+  classificar_faixa_incidencia <- function(incidencia) {
+    dplyr::case_when(
+      !is.finite(incidencia) ~ "Sem dados",
+      incidencia < 50 ~ "Muito baixa (<50)",
+      incidencia < 100 ~ "Baixa (50 a <100)",
+      incidencia < 300 ~ "Moderada (100 a <300)",
+      incidencia < 500 ~ "Alta (300 a <500)",
+      TRUE ~ "Muito alta (>=500)"
+    )
+  }
+
   nivel_mapa_atual <- reactive({
     nivel <- input$nivel_mapa
     if (is.null(nivel) || !(nivel %in% c("municipio", "gve", "drs"))) {
@@ -698,6 +718,73 @@ server <- function(input, output, session) {
     }
     nivel
   })
+
+  resumo_municipios <- reactive({
+    df <- dados_filtrados()
+
+    if (nrow(df) == 0) {
+      return(
+        tibble::tibble(
+          municipio = character(),
+          casos = numeric(),
+          surtos = numeric(),
+          populacao = numeric(),
+          incidencia = numeric(),
+          status_surto = character(),
+          faixa_incidencia = character()
+        )
+      )
+    }
+
+    df %>%
+      group_by(municipio) %>%
+      summarise(
+        casos = sum(casos, na.rm = TRUE),
+        surtos = sum(surtos, na.rm = TRUE),
+        populacao = max(populacao, na.rm = TRUE),
+        .groups = "drop"
+      ) %>%
+      mutate(
+        populacao = ifelse(is.infinite(populacao) | populacao <= 0, NA_real_, populacao),
+        incidencia = ifelse(populacao > 0, (casos / populacao) * 100000, NA_real_),
+        status_surto = ifelse(surtos > 0, "Em surto", "Sem surto"),
+        faixa_incidencia = classificar_faixa_incidencia(incidencia)
+      ) %>%
+      arrange(desc(incidencia), desc(casos), municipio)
+  })
+
+  output$tabela_municipios <- renderDataTable({
+    resumo <- resumo_municipios()
+
+    if (nrow(resumo) == 0) {
+      return(
+        tibble::tibble(
+          Município = character(),
+          Casos = integer(),
+          `Incidência (/100 mil)` = numeric(),
+          `Situação de surto` = character(),
+          `Faixa de incidência` = character()
+        )
+      )
+    }
+
+    resumo %>%
+      transmute(
+        Município = municipio,
+        Casos = as.integer(round(casos)),
+        `Incidência (/100 mil)` = round(incidencia, 2),
+        `Situação de surto` = status_surto,
+        `Faixa de incidência` = faixa_incidencia
+      )
+  },
+  rownames = FALSE,
+  options = list(
+    pageLength = 15,
+    lengthMenu = c(10, 15, 25, 50),
+    autoWidth = TRUE,
+    order = list(list(2, "desc")),
+    dom = "tip"
+  ))
 
   dados_mapa_nivel <- reactive({
     df <- dados_filtrados()
@@ -709,8 +796,11 @@ server <- function(input, output, session) {
           rotulo = character(),
           map_key = character(),
           casos = numeric(),
+          surtos = numeric(),
           populacao = numeric(),
-          incidencia = numeric()
+          incidencia = numeric(),
+          status_surto = character(),
+          faixa_incidencia = character()
         )
       )
     }
@@ -720,27 +810,23 @@ server <- function(input, output, session) {
 
     if (nivel == "municipio") {
       return(
-        df %>%
-          group_by(municipio) %>%
-          summarise(
-            casos = sum(casos, na.rm = TRUE),
-            populacao = max(populacao, na.rm = TRUE),
-            .groups = "drop"
-          ) %>%
+        resumo_municipios() %>%
           mutate(
-            populacao = ifelse(is.infinite(populacao), NA_real_, populacao),
-            incidencia = ifelse(populacao > 0, (casos / populacao) * 100000, NA_real_),
             rotulo = municipio,
             map_key = normalize_shape_key(rotulo, level = "municipio")
           ) %>%
-          select(rotulo, map_key, casos, populacao, incidencia)
+          select(rotulo, map_key, casos, surtos, populacao, incidencia, status_surto, faixa_incidencia)
       )
     }
 
     if (nivel == "gve") {
       casos_nivel <- df %>%
         group_by(gve) %>%
-        summarise(casos = sum(casos, na.rm = TRUE), .groups = "drop")
+        summarise(
+          casos = sum(casos, na.rm = TRUE),
+          surtos = sum(surtos, na.rm = TRUE),
+          .groups = "drop"
+        )
 
       pop_nivel <- base_pop %>%
         group_by(gve) %>%
@@ -752,16 +838,22 @@ server <- function(input, output, session) {
           mutate(
             populacao = ifelse(populacao <= 0, NA_real_, populacao),
             incidencia = ifelse(populacao > 0, (casos / populacao) * 100000, NA_real_),
+            status_surto = ifelse(surtos > 0, "Em surto", "Sem surto"),
+            faixa_incidencia = classificar_faixa_incidencia(incidencia),
             rotulo = gve,
             map_key = normalize_shape_key(rotulo, level = "gve")
           ) %>%
-          select(rotulo, map_key, casos, populacao, incidencia)
+          select(rotulo, map_key, casos, surtos, populacao, incidencia, status_surto, faixa_incidencia)
       )
     }
 
     casos_nivel <- df %>%
       group_by(drs) %>%
-      summarise(casos = sum(casos, na.rm = TRUE), .groups = "drop")
+      summarise(
+        casos = sum(casos, na.rm = TRUE),
+        surtos = sum(surtos, na.rm = TRUE),
+        .groups = "drop"
+      )
 
     pop_nivel <- base_pop %>%
       group_by(drs) %>%
@@ -772,10 +864,12 @@ server <- function(input, output, session) {
       mutate(
         populacao = ifelse(populacao <= 0, NA_real_, populacao),
         incidencia = ifelse(populacao > 0, (casos / populacao) * 100000, NA_real_),
+        status_surto = ifelse(surtos > 0, "Em surto", "Sem surto"),
+        faixa_incidencia = classificar_faixa_incidencia(incidencia),
         rotulo = drs,
         map_key = normalize_shape_key(rotulo, level = "drs")
       ) %>%
-      select(rotulo, map_key, casos, populacao, incidencia)
+      select(rotulo, map_key, casos, surtos, populacao, incidencia, status_surto, faixa_incidencia)
   })
 
   pontos_base_mapa <- reactive({
@@ -858,14 +952,10 @@ server <- function(input, output, session) {
       )
     }
 
-    inc_values <- df_mapa$incidencia[is.finite(df_mapa$incidencia)]
-    if (length(inc_values) == 0) {
-      inc_values <- c(0, 1)
-    }
-
-    pal <- colorNumeric(
-      palette = c("#deebf7", "#9ecae1", "#3182bd", "#08519c"),
-      domain = inc_values,
+    pal <- colorFactor(
+      palette = c("#f2f4f6", "#deebf7", "#9ecae1", "#6baed6", "#3182bd", "#08519c"),
+      levels = incidencia_faixas,
+      ordered = TRUE,
       na.color = "#f2f4f6"
     )
 
@@ -894,27 +984,41 @@ server <- function(input, output, session) {
         shp_join$rotulo
       )
 
+      shp_join$surto_exibicao <- ifelse(
+        is.na(shp_join$status_surto) | shp_join$status_surto == "",
+        "Sem dados",
+        as.character(shp_join$status_surto)
+      )
+
+      shp_join$faixa_exibicao <- ifelse(
+        is.na(shp_join$faixa_incidencia) | shp_join$faixa_incidencia == "",
+        "Sem dados",
+        as.character(shp_join$faixa_incidencia)
+      )
+
       shp_join$tooltip <- ifelse(
         is.na(shp_join$casos),
         paste0("<strong>", shp_join$label_exibicao, "</strong><br>Sem notificações para os filtros"),
         paste0(
           "<strong>", shp_join$label_exibicao, "</strong><br>",
           "Casos: ", format(round(shp_join$casos), big.mark = ".", decimal.mark = ","), "<br>",
-          "Incidência: ", format(round(shp_join$incidencia, 2), decimal.mark = ","), "/100 mil"
+          "Incidência: ", format(round(shp_join$incidencia, 2), decimal.mark = ","), "/100 mil<br>",
+          "Faixa de incidência: ", shp_join$faixa_exibicao, "<br>",
+          "Situação de surto: ", shp_join$surto_exibicao
         )
       )
 
       titulo_legenda <- ifelse(
         shape_source == "local",
-        "Incidência (/100 mil)",
-        "Incidência (/100 mil) - fallback"
+        "Faixa de incidência (/100 mil)",
+        "Faixa de incidência (/100 mil) - fallback"
       )
 
       return(
         leaflet(shp_join) %>%
           addProviderTiles("CartoDB.Positron") %>%
           addPolygons(
-            fillColor = ~pal(incidencia),
+            fillColor = ~pal(faixa_incidencia),
             color = "#d1d5db",
             weight = 1,
             fillOpacity = 0.8,
@@ -923,8 +1027,8 @@ server <- function(input, output, session) {
             highlightOptions = highlightOptions(weight = 2, color = "#005ca9", bringToFront = TRUE)
           ) %>%
           addLegend(
-            pal = pal,
-            values = inc_values,
+            colors = unname(pal(incidencia_faixas)),
+            labels = incidencia_faixas,
             title = titulo_legenda,
             position = "bottomright",
             opacity = 0.9
@@ -962,18 +1066,20 @@ server <- function(input, output, session) {
         stroke = TRUE,
         weight = 1.2,
         color = "#0f172a",
-        fillColor = ~pal(incidencia),
+        fillColor = ~pal(faixa_incidencia),
         fillOpacity = 0.85,
         popup = ~paste0(
           "<strong>", titulo_nivel, ": ", rotulo, "</strong><br>",
           "Casos: ", format(round(casos), big.mark = ".", decimal.mark = ","), "<br>",
-          "Incidência: ", format(round(incidencia, 2), decimal.mark = ","), "/100 mil"
+          "Incidência: ", format(round(incidencia, 2), decimal.mark = ","), "/100 mil<br>",
+          "Faixa de incidência: ", faixa_incidencia, "<br>",
+          "Situação de surto: ", status_surto
         )
       ) %>%
       addLegend(
-        pal = pal,
-        values = inc_values,
-        title = paste0("Incidência (/100 mil) - ", toupper(nivel)),
+        colors = unname(pal(incidencia_faixas)),
+        labels = incidencia_faixas,
+        title = paste0("Faixa de incidência (/100 mil) - ", toupper(nivel)),
         position = "bottomright",
         opacity = 0.9
       )
