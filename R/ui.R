@@ -1,3 +1,7 @@
+if (!("package:bslib" %in% search())) {
+  suppressPackageStartupMessages(library(bslib))
+}
+
 custom_theme <- bs_theme(
   version = 5,
   preset = "bootstrap",
