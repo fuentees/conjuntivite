@@ -1,6 +1,22 @@
-if (!("package:bslib" %in% search())) {
-  suppressPackageStartupMessages(library(bslib))
+ensure_attached_package <- function(pkg) {
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    stop(
+      sprintf(
+        "Pacote '%s' não está instalado. Execute install.packages('%s').",
+        pkg, pkg
+      ),
+      call. = FALSE
+    )
+  }
+
+  if (!(paste0("package:", pkg) %in% search())) {
+    suppressPackageStartupMessages(library(pkg, character.only = TRUE))
+  }
 }
+
+ensure_attached_package("bslib")
+ensure_attached_package("plotly")
+ensure_attached_package("leaflet")
 
 custom_theme <- bs_theme(
   version = 5,

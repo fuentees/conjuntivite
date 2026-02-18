@@ -1,3 +1,22 @@
+ensure_attached_package <- function(pkg) {
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    stop(
+      sprintf(
+        "Pacote '%s' não está instalado. Execute install.packages('%s').",
+        pkg, pkg
+      ),
+      call. = FALSE
+    )
+  }
+
+  if (!(paste0("package:", pkg) %in% search())) {
+    suppressPackageStartupMessages(library(pkg, character.only = TRUE))
+  }
+}
+
+ensure_attached_package("plotly")
+ensure_attached_package("leaflet")
+
 server <- function(input, output, session) {
   anos_ordenados <- sort(unique(dados_epidemiologicos$ano), decreasing = TRUE)
   ano_padrao <- if (length(anos_ordenados) > 0) anos_ordenados[1] else as.integer(format(Sys.Date(), "%Y"))
