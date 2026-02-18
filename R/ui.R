@@ -63,10 +63,11 @@ ui <- tagList(
         tags$small("Conjuntivites", class = "text-muted")
       )
     ),
-    bg = "#ffffff",
-    inverse = FALSE,
-    underlines = TRUE,
-    collapsible = TRUE,
+    navbar_options = navbar_options(
+      bg = "#ffffff",
+      theme = "light",
+      collapsible = TRUE
+    ),
     header = tags$head(
       tags$style(
         HTML(
@@ -115,6 +116,10 @@ ui <- tagList(
             border-radius: 999px;
             background: #e8f1fb;
             color: #005ca9;
+            font-weight: 600;
+          }
+          .navbar-nav .nav-link.active {
+            border-bottom: 2px solid #005ca9;
             font-weight: 600;
           }
           "
