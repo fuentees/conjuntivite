@@ -253,27 +253,35 @@ server <- function(input, output, session) {
     }
 
     ano_sel <- selected_year()
-    historico_base <- df %>% filter(ano < ano_sel)
+    df_historico <- df %>% filter(ano != 2011)
+
+    historico_base <- df_historico %>% filter(ano < ano_sel)
     if (nrow(historico_base) == 0) {
-      historico_base <- df %>% filter(ano != ano_sel)
-    }
-    if (nrow(historico_base) == 0) {
-      historico_base <- df
+      historico_base <- df_historico %>% filter(ano != ano_sel)
     }
 
-    stats_semanal <- historico_base %>%
-      group_by(semana) %>%
-      summarise(
-        media = mean(casos, na.rm = TRUE),
-        desvio = sd(casos, na.rm = TRUE),
-        .groups = "drop"
-      ) %>%
-      mutate(
-        desvio = tidyr::replace_na(desvio, 0),
-        limite_superior = pmax(media + 1.96 * desvio, media * 1.15),
-        limite_inferior = pmax(media - 1.96 * desvio, 0)
-      ) %>%
-      select(semana, media, limite_superior, limite_inferior)
+    if (nrow(historico_base) == 0) {
+      stats_semanal <- tibble::tibble(
+        semana = 1:53,
+        media = 0,
+        limite_superior = 0,
+        limite_inferior = 0
+      )
+    } else {
+      stats_semanal <- historico_base %>%
+        group_by(semana) %>%
+        summarise(
+          media = mean(casos, na.rm = TRUE),
+          desvio = sd(casos, na.rm = TRUE),
+          .groups = "drop"
+        ) %>%
+        mutate(
+          desvio = tidyr::replace_na(desvio, 0),
+          limite_superior = pmax(media + 1.96 * desvio, media * 1.15),
+          limite_inferior = pmax(media - 1.96 * desvio, 0)
+        ) %>%
+        select(semana, media, limite_superior, limite_inferior)
+    }
 
     atual <- df %>%
       filter(ano == ano_sel) %>%
@@ -387,7 +395,20 @@ server <- function(input, output, session) {
         plot_bgcolor = "rgba(245,245,245,0.5)",
         paper_bgcolor = "white",
         xaxis = list(title = "Semana epidemiológica", showgrid = TRUE, gridcolor = "#e5e7eb"),
-        yaxis = list(title = "Casos", showgrid = TRUE, gridcolor = "#e5e7eb")
+        yaxis = list(title = "Casos", showgrid = TRUE, gridcolor = "#e5e7eb"),
+        annotations = list(
+          list(
+            x = 0.01,
+            y = 1.14,
+            xref = "paper",
+            yref = "paper",
+            xanchor = "left",
+            yanchor = "bottom",
+            text = "Base histórica do canal endêmico: exclui 2011",
+            showarrow = FALSE,
+            font = list(size = 11, color = "#52606d")
+          )
+        )
       )
   })
 
