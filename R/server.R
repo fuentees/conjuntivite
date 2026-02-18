@@ -998,27 +998,79 @@ server <- function(input, output, session) {
       )
   })
 
-  output$grafico_faixa_etaria <- renderPlotly({
+  resumo_faixa_etaria <- reactive({
     df <- dados_ano_referencia()
 
+    faixas <- c("< 1 ano", "1 a 4", "5 a 9", "10 a 14", "15+")
+    zero_tbl <- tibble::tibble(faixa = faixas, casos = 0, origem = "sem_dados")
+
     if (nrow(df) == 0) {
+      return(zero_tbl)
+    }
+
+    valores_observados <- c(
+      sum(df$fx_menor1, na.rm = TRUE),
+      sum(df$fx_1a4, na.rm = TRUE),
+      sum(df$fx_5a9, na.rm = TRUE),
+      sum(df$fx_10a14, na.rm = TRUE),
+      sum(df$fx_15mais, na.rm = TRUE)
+    )
+
+    total_observado <- sum(valores_observados, na.rm = TRUE)
+    if (is.finite(total_observado) && total_observado > 0) {
+      return(tibble::tibble(faixa = faixas, casos = valores_observados, origem = "observado"))
+    }
+
+    # Fallback: se a base vier sem detalhamento etário no recorte atual,
+    # estima usando perfil histórico do mesmo recorte dimensional.
+    hist_df <- dados_filtrados_dimensoes()
+    valores_historicos <- c(
+      sum(hist_df$fx_menor1, na.rm = TRUE),
+      sum(hist_df$fx_1a4, na.rm = TRUE),
+      sum(hist_df$fx_5a9, na.rm = TRUE),
+      sum(hist_df$fx_10a14, na.rm = TRUE),
+      sum(hist_df$fx_15mais, na.rm = TRUE)
+    )
+
+    total_hist <- sum(valores_historicos, na.rm = TRUE)
+    if (!is.finite(total_hist) || total_hist <= 0) {
+      props <- c(0.07, 0.23, 0.24, 0.18, 0.28)
+      origem <- "estimado_padrao"
+    } else {
+      props <- valores_historicos / total_hist
+      origem <- "estimado_historico"
+    }
+
+    total_casos <- sum(df$casos, na.rm = TRUE)
+    if (!is.finite(total_casos) || total_casos <= 0) {
+      return(zero_tbl)
+    }
+
+    estimado <- round(total_casos * props)
+    delta <- as.integer(total_casos - sum(estimado, na.rm = TRUE))
+    estimado[length(estimado)] <- pmax(estimado[length(estimado)] + delta, 0)
+
+    tibble::tibble(
+      faixa = faixas,
+      casos = pmax(estimado, 0),
+      origem = origem
+    )
+  })
+
+  output$grafico_faixa_etaria <- renderPlotly({
+    faixa_df <- resumo_faixa_etaria()
+    if (nrow(faixa_df) == 0 || sum(faixa_df$casos, na.rm = TRUE) <= 0) {
       return(empty_plotly("Sem dados de faixa etária para os filtros selecionados"))
     }
 
-    faixa_df <- tibble::tibble(
-      faixa = c("< 1 ano", "1 a 4", "5 a 9", "10 a 14", "15+"),
-      casos = c(
-        sum(df$fx_menor1, na.rm = TRUE),
-        sum(df$fx_1a4, na.rm = TRUE),
-        sum(df$fx_5a9, na.rm = TRUE),
-        sum(df$fx_10a14, na.rm = TRUE),
-        sum(df$fx_15mais, na.rm = TRUE)
-      )
+    origem <- as.character(faixa_df$origem[1])
+    anotacao <- switch(
+      origem,
+      observado = "Faixas etárias observadas na base",
+      estimado_historico = "Faixas etárias estimadas pelo perfil histórico do recorte",
+      estimado_padrao = "Faixas etárias estimadas por perfil padrão",
+      "Faixas etárias sem dados"
     )
-
-    if (sum(faixa_df$casos, na.rm = TRUE) <= 0) {
-      return(empty_plotly("Sem registros de faixa etária no período selecionado"))
-    }
 
     plot_ly(
       faixa_df,
@@ -1034,7 +1086,20 @@ server <- function(input, output, session) {
         plot_bgcolor = "rgba(245,245,245,0.5)",
         paper_bgcolor = "white",
         xaxis = list(title = "Faixa etária", showgrid = FALSE),
-        yaxis = list(title = "Casos", showgrid = TRUE, gridcolor = "#e5e7eb")
+        yaxis = list(title = "Casos", showgrid = TRUE, gridcolor = "#e5e7eb"),
+        annotations = list(
+          list(
+            x = 0.01,
+            y = 1.12,
+            xref = "paper",
+            yref = "paper",
+            xanchor = "left",
+            yanchor = "bottom",
+            text = anotacao,
+            showarrow = FALSE,
+            font = list(size = 11, color = "#52606d")
+          )
+        )
       )
   })
 
@@ -1435,6 +1500,17 @@ server <- function(input, output, session) {
     local_shape <- get_local_shape_layer(nivel)
     shape_source <- "local"
 
+    sanitize_map_label <- function(x) {
+      x <- as.character(x)
+      x <- trimws(gsub("[\\r\\n\\t]+", " ", x))
+      x <- gsub("\\s{2,}", " ", x)
+      x[is.na(x) | x == ""] <- "Área sem identificação"
+      x <- sub("^([^,;|/]+).*$", "\\1", x)
+      x <- trimws(x)
+      x[nchar(x) > 80] <- paste0(substr(x[nchar(x) > 80], 1, 80), "...")
+      x
+    }
+
     if (is.null(local_shape) && nivel == "municipio") {
       geobr_shape <- get_sp_municipality_shapes()
       if (!is.null(geobr_shape) && nrow(geobr_shape) > 0) {
@@ -1456,6 +1532,7 @@ server <- function(input, output, session) {
         as.character(shp_join$map_label),
         shp_join$rotulo
       )
+      shp_join$label_exibicao <- sanitize_map_label(shp_join$label_exibicao)
 
       shp_join$surto_exibicao <- ifelse(
         is.na(shp_join$status_surto) | shp_join$status_surto == "",
@@ -1470,10 +1547,11 @@ server <- function(input, output, session) {
       )
 
       shp_join$layer_id <- ifelse(
-        !is.na(shp_join$map_key) & shp_join$map_key != "",
-        as.character(shp_join$map_key),
-        as.character(shp_join$label_exibicao)
+        !is.na(shp_join$rotulo) & shp_join$rotulo != "",
+        normalize_key(shp_join$rotulo),
+        as.character(shp_join$map_key)
       )
+      shp_join$layer_id[is.na(shp_join$layer_id) | shp_join$layer_id == ""] <- paste0("shape_", seq_len(nrow(shp_join)))
 
       shp_join$tooltip <- ifelse(
         is.na(shp_join$casos),
@@ -1503,7 +1581,7 @@ server <- function(input, output, session) {
             fillOpacity = 0.8,
             smoothFactor = 0.2,
             layerId = ~layer_id,
-            label = ~htmltools::HTML(tooltip),
+            popup = ~htmltools::HTML(tooltip),
             highlightOptions = highlightOptions(weight = 2, color = "#005ca9", bringToFront = TRUE)
           ) %>%
           addLegend(
