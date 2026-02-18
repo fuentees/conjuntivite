@@ -41,11 +41,17 @@ if (length(anos_disponiveis) == 0) {
   anos_disponiveis <- year(Sys.Date())
 }
 
+banner_topo_src <- if (file.exists(file.path("www", "banner_governo_sp.png"))) {
+  "banner_governo_sp.png"
+} else {
+  "banner_governo_sp.svg"
+}
+
 ui <- tagList(
   div(
     class = "sp-gov-banner-wrapper",
     tags$img(
-      src = "banner_governo_sp.svg",
+      src = banner_topo_src,
       class = "sp-gov-banner-img",
       alt = "Banner institucional da Secretaria de Estado da Saúde de São Paulo"
     )
@@ -75,18 +81,56 @@ ui <- tagList(
           .sp-gov-banner-wrapper {
             width: 100%;
             background: #00508f;
+            display: flex;
+            align-items: center;
+            justify-content: center;
             border-bottom: 1px solid rgba(255, 255, 255, 0.1);
           }
           .sp-gov-banner-img {
             width: 100%;
-            max-height: 92px;
-            object-fit: cover;
+            height: auto;
+            max-height: 112px;
+            object-fit: contain;
             display: block;
           }
           .app-container {
             background: #f4f6f8;
             min-height: calc(100vh - 56px);
             padding-bottom: 2rem;
+          }
+          .navbar .navbar-nav {
+            gap: 0.35rem;
+          }
+          .navbar .navbar-nav .nav-link {
+            border-radius: 10px;
+            color: #243b53 !important;
+            font-weight: 500;
+            padding: 0.45rem 0.9rem !important;
+            transition: background-color 0.2s ease, color 0.2s ease;
+          }
+          .navbar .navbar-nav .nav-link:hover {
+            background: #eef4fb;
+            color: #005ca9 !important;
+          }
+          .navbar .navbar-nav .nav-link.active {
+            background: #e5effb;
+            color: #005ca9 !important;
+            font-weight: 700;
+            border-bottom: none;
+            box-shadow: inset 0 -2px 0 #005ca9;
+          }
+          .filter-card {
+            position: relative;
+            z-index: 20;
+            overflow: visible !important;
+          }
+          .filter-card .shiny-input-container,
+          .filter-card .selectize-control {
+            z-index: 30;
+          }
+          .selectize-dropdown,
+          .selectize-dropdown-content {
+            z-index: 3000 !important;
           }
           .filter-card,
           .custom-card,
@@ -118,16 +162,17 @@ ui <- tagList(
             color: #005ca9;
             font-weight: 600;
           }
-          .navbar-nav .nav-link.active {
-            border-bottom: 2px solid #005ca9;
-            font-weight: 600;
+          @media (max-width: 768px) {
+            .sp-gov-banner-img {
+              max-height: 72px;
+            }
           }
           "
         )
       )
     ),
     nav_panel(
-    "Painel",
+    title = tagList(icon("chart-line"), " Painel"),
     div(
       class = "app-container",
       div(
@@ -213,7 +258,7 @@ ui <- tagList(
           col_widths = c(6, 6),
           card(
             class = "custom-card",
-            card_header("Série temporal — casos por semana epidemiológica"),
+            card_header("Série temporal — casos por semana epidemiológica (barras)"),
             plotlyOutput("grafico_serie_temporal", height = "360px"),
             full_screen = TRUE
           ),
@@ -229,7 +274,7 @@ ui <- tagList(
           col_widths = c(6, 6),
           card(
             class = "custom-card",
-            card_header("Diagrama de controle"),
+            card_header("Diagrama de controle (CL, UCL e LCL)"),
             plotlyOutput("grafico_diagrama_controle", height = "350px"),
             full_screen = TRUE
           ),
@@ -266,7 +311,7 @@ ui <- tagList(
     )
     ),
     nav_panel(
-    "Sobre",
+    title = tagList(icon("info-circle"), " Sobre"),
     div(
       class = "container-fluid py-3",
       card(

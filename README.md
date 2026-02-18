@@ -12,9 +12,9 @@ Aplicativo Shiny para monitoramento semanal de conjuntivites com interface moder
   - Número de surtos (semanas acima do limite superior)
   - Situação epidemiológica (Normal / Alerta / Epidemia)
 - Gráficos interativos (plotly):
-  1. Série temporal por semana epidemiológica
+  1. Série temporal por semana epidemiológica (barras)
   2. Canal endêmico (média histórica + limites + ano selecionado)
-  3. Diagrama de controle
+  3. Diagrama de controle (CL, UCL = média + 3DP, LCL)
   4. Casos por GVE
 - Mapa interativo territorial (leaflet):
   - Níveis: Município, GVE e DRS
@@ -63,6 +63,10 @@ shiny::runApp(".")
 
 > `geobr` e `sf` são recomendados para coroplético com polígonos.
 > Sem eles, o mapa funciona em modo fallback com marcadores.
+
+Para usar o banner oficial em imagem, basta adicionar:
+
+- `www/banner_governo_sp.png` (tem prioridade sobre o SVG padrão)
 
 ## Mapas locais (shapefile)
 

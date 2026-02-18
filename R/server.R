@@ -48,6 +48,27 @@ server <- function(input, output, session) {
     }
   })
 
+  clean_choice_values <- function(values) {
+    values <- as.character(values)
+    values <- trimws(values)
+    values <- values[!is.na(values) & values != "" & tolower(values) != "na"]
+    sort(unique(values))
+  }
+
+  all_drs_choices <- clean_choice_values(dados_epidemiologicos$drs)
+  all_gve_choices <- clean_choice_values(dados_epidemiologicos$gve)
+  all_municipio_choices <- clean_choice_values(dados_epidemiologicos$municipio)
+
+  if (length(all_drs_choices) == 0) {
+    all_drs_choices <- "Não informado"
+  }
+  if (length(all_gve_choices) == 0) {
+    all_gve_choices <- "Não informado"
+  }
+  if (length(all_municipio_choices) == 0) {
+    all_municipio_choices <- "Não informado"
+  }
+
   if (identical(dados_fonte, "mock")) {
     session$onFlushed(
       function() {
@@ -66,8 +87,10 @@ server <- function(input, output, session) {
     df_ano <- dados_epidemiologicos %>%
       filter(ano == as.integer(input$filtro_ano))
 
-    drs_choices <- sort(unique(df_ano$drs))
-    drs_choices <- drs_choices[!is.na(drs_choices)]
+    drs_choices <- clean_choice_values(df_ano$drs)
+    if (length(drs_choices) == 0) {
+      drs_choices <- all_drs_choices
+    }
 
     updateSelectInput(
       session,
@@ -75,22 +98,31 @@ server <- function(input, output, session) {
       choices = c("Todas", drs_choices),
       selected = "Todas"
     )
-    updateSelectInput(session, "filtro_gve", choices = "Todas", selected = "Todas")
-    updateSelectInput(session, "filtro_municipio", choices = "Todos", selected = "Todos")
+    updateSelectInput(session, "filtro_gve", choices = c("Todas", all_gve_choices), selected = "Todas")
+    updateSelectInput(session, "filtro_municipio", choices = c("Todos", all_municipio_choices), selected = "Todos")
   }, ignoreNULL = FALSE)
 
   observeEvent(input$filtro_drs, {
     req(input$filtro_ano)
-    df <- dados_epidemiologicos %>% filter(ano == as.integer(input$filtro_ano))
+    df_ano <- dados_epidemiologicos %>% filter(ano == as.integer(input$filtro_ano))
+    df <- df_ano
 
     if (!is.null(input$filtro_drs) && input$filtro_drs != "Todas") {
       df <- df %>% filter(drs == input$filtro_drs)
     }
 
-    gve_choices <- sort(unique(df$gve))
-    gve_choices <- gve_choices[!is.na(gve_choices)]
+    gve_choices <- clean_choice_values(df$gve)
     if (length(gve_choices) == 0) {
-      gve_choices <- "Sem dados"
+      if (!is.null(input$filtro_drs) && input$filtro_drs != "Todas") {
+        gve_choices <- clean_choice_values(dados_epidemiologicos$gve[dados_epidemiologicos$drs == input$filtro_drs])
+      }
+
+      if (length(gve_choices) == 0) {
+        gve_choices <- clean_choice_values(df_ano$gve)
+      }
+      if (length(gve_choices) == 0) {
+        gve_choices <- all_gve_choices
+      }
     }
 
     updateSelectInput(
@@ -99,12 +131,13 @@ server <- function(input, output, session) {
       choices = c("Todas", gve_choices),
       selected = "Todas"
     )
-    updateSelectInput(session, "filtro_municipio", choices = "Todos", selected = "Todos")
+    updateSelectInput(session, "filtro_municipio", choices = c("Todos", all_municipio_choices), selected = "Todos")
   }, ignoreNULL = FALSE)
 
   observeEvent(input$filtro_gve, {
     req(input$filtro_ano)
-    df <- dados_epidemiologicos %>% filter(ano == as.integer(input$filtro_ano))
+    df_ano <- dados_epidemiologicos %>% filter(ano == as.integer(input$filtro_ano))
+    df <- df_ano
 
     if (!is.null(input$filtro_drs) && input$filtro_drs != "Todas") {
       df <- df %>% filter(drs == input$filtro_drs)
@@ -114,10 +147,17 @@ server <- function(input, output, session) {
       df <- df %>% filter(gve == input$filtro_gve)
     }
 
-    mun_choices <- sort(unique(df$municipio))
-    mun_choices <- mun_choices[!is.na(mun_choices)]
+    mun_choices <- clean_choice_values(df$municipio)
     if (length(mun_choices) == 0) {
-      mun_choices <- "Sem dados"
+      if (!is.null(input$filtro_gve) && input$filtro_gve != "Todas") {
+        mun_choices <- clean_choice_values(dados_epidemiologicos$municipio[dados_epidemiologicos$gve == input$filtro_gve])
+      }
+      if (length(mun_choices) == 0) {
+        mun_choices <- clean_choice_values(df_ano$municipio)
+      }
+      if (length(mun_choices) == 0) {
+        mun_choices <- all_municipio_choices
+      }
     }
 
     updateSelectInput(
@@ -143,11 +183,11 @@ server <- function(input, output, session) {
       df <- df %>% filter(drs == input$filtro_drs)
     }
 
-    if (!is.null(input$filtro_gve) && input$filtro_gve != "Todas" && input$filtro_gve != "Sem dados") {
+    if (!is.null(input$filtro_gve) && input$filtro_gve != "Todas") {
       df <- df %>% filter(gve == input$filtro_gve)
     }
 
-    if (!is.null(input$filtro_municipio) && input$filtro_municipio != "Todos" && input$filtro_municipio != "Sem dados") {
+    if (!is.null(input$filtro_municipio) && input$filtro_municipio != "Todos") {
       df <- df %>% filter(municipio == input$filtro_municipio)
     }
 
@@ -297,14 +337,22 @@ server <- function(input, output, session) {
 
     media <- mean(serie$casos, na.rm = TRUE)
 
-    plot_ly(serie, x = ~semana, y = ~casos, type = "scatter", mode = "lines+markers", name = "Casos") %>%
+    plot_ly(
+      serie,
+      x = ~semana,
+      y = ~casos,
+      type = "bar",
+      name = "Casos por semana",
+      marker = list(color = "#1976d2", opacity = 0.9),
+      hovertemplate = "Semana %{x}<br>Casos: %{y}<extra></extra>"
+    ) %>%
       add_trace(
         x = ~semana,
         y = media,
         type = "scatter",
         mode = "lines",
-        name = "Média do ano",
-        line = list(color = "#607d8b", dash = "dash", width = 1.5)
+        name = "CL (média)",
+        line = list(color = "#455a64", dash = "dash", width = 2)
       ) %>%
       layout(
         hovermode = "x unified",
@@ -375,51 +423,58 @@ server <- function(input, output, session) {
     desvio <- sd(serie$casos, na.rm = TRUE)
     desvio <- ifelse(is.na(desvio), 0, desvio)
 
-    limite_sup <- media + 2 * desvio
-    limite_inf <- pmax(media - 2 * desvio, 0)
+    limite_sup <- media + 3 * desvio
+    limite_inf <- pmax(media - 3 * desvio, 0)
 
     serie <- serie %>%
       mutate(
-        media = media,
-        limite_sup = limite_sup,
-        limite_inf = limite_inf,
-        fora_controle = casos > limite_sup
+        CL = media,
+        UCL = limite_sup,
+        LCL = limite_inf,
+        acima_ucl = casos > UCL
       )
 
-    plot_ly(serie, x = ~semana, y = ~casos, type = "scatter", mode = "markers", name = "Casos") %>%
+    plot_ly(
+      serie,
+      x = ~semana,
+      y = ~casos,
+      type = "scatter",
+      mode = "markers",
+      name = "Casos semanais",
+      marker = list(size = 8, color = "#1f77b4", opacity = 0.75)
+    ) %>%
       add_trace(
         x = ~semana,
-        y = ~media,
+        y = ~CL,
         type = "scatter",
         mode = "lines",
-        name = "Média",
+        name = "CL (Média)",
         line = list(color = "#2e7d32", width = 2)
       ) %>%
       add_trace(
         x = ~semana,
-        y = ~limite_sup,
+        y = ~UCL,
         type = "scatter",
         mode = "lines",
-        name = "Limite superior",
+        name = "UCL (Média + 3DP)",
         line = list(color = "#d32f2f", dash = "dash", width = 1.6)
       ) %>%
       add_trace(
         x = ~semana,
-        y = ~limite_inf,
+        y = ~LCL,
         type = "scatter",
         mode = "lines",
-        name = "Limite inferior",
-        line = list(color = "#d32f2f", dash = "dash", width = 1.6),
-        showlegend = FALSE
+        name = "LCL (Média - 3DP)",
+        line = list(color = "#ef6c00", dash = "dot", width = 1.6)
       ) %>%
       add_trace(
-        data = serie %>% filter(fora_controle),
+        data = serie %>% filter(acima_ucl),
         x = ~semana,
         y = ~casos,
         type = "scatter",
         mode = "markers",
-        name = "Ponto crítico",
-        marker = list(size = 9, color = "#d32f2f", symbol = "x")
+        name = "Acima do UCL",
+        marker = list(size = 10, color = "#d32f2f", symbol = "circle")
       ) %>%
       layout(
         hovermode = "x unified",
