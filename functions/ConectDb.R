@@ -20,7 +20,8 @@ ConectDb <- function() {
     password = Sys.getenv("OFTALMO_DB_PASSWORD", unset = "Saude@123Oftal"),
     encoding = "UTF-8",
     dbname = Sys.getenv("OFTALMO_DB_NAME", unset = "cevesp_2k17"),
-    host = Sys.getenv("OFTALMO_DB_HOST", unset = "192.168.1.204")
+    host = Sys.getenv("OFTALMO_DB_HOST", unset = "192.168.1.204"),
+    port = as.integer(Sys.getenv("OFTALMO_DB_PORT", unset = "3306"))
   )
 
   con

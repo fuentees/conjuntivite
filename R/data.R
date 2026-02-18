@@ -409,8 +409,19 @@ prepare_oftalmo_dataset <- function(raw_data) {
   surto_col <- pick_existing_column(raw_data, c("NuSurto", "nu_surto"))
   surto_flag_col <- pick_existing_column(raw_data, c("Surto", "surto"))
 
-  if (is.null(municipio_col) || is.null(gve_col) || is.null(casos_col)) {
-    return(NULL)
+  missing_columns <- character()
+  if (is.null(municipio_col)) missing_columns <- c(missing_columns, "MunicipioNotificacao")
+  if (is.null(gve_col)) missing_columns <- c(missing_columns, "dominio_gve")
+  if (is.null(casos_col)) missing_columns <- c(missing_columns, "TotalCaso")
+
+  if (length(missing_columns) > 0) {
+    stop(
+      paste0(
+        "Colunas obrigatórias não encontradas na tabela: ",
+        paste(missing_columns, collapse = ", "),
+        ". Verifique os nomes reais no banco."
+      )
+    )
   }
 
   df <- raw_data %>%
@@ -501,13 +512,23 @@ generate_mock_data <- function() {
 }
 
 load_epidemiological_data <- function(prefer_db = TRUE, allow_mock_fallback = FALSE) {
+  db_error <- NULL
+  db_empty <- FALSE
+
   if (prefer_db && exists("load_oftalmo_raw_data", mode = "function")) {
     db_data <- tryCatch(
       {
         raw <- load_oftalmo_raw_data()
-        prepare_oftalmo_dataset(raw)
+        prepared <- prepare_oftalmo_dataset(raw)
+        if (is.null(prepared) || nrow(prepared) == 0) {
+          db_empty <<- TRUE
+        }
+        prepared
       },
-      error = function(e) NULL
+      error = function(e) {
+        db_error <<- conditionMessage(e)
+        NULL
+      }
     )
 
     if (!is.null(db_data) && nrow(db_data) > 0) {
@@ -517,9 +538,18 @@ load_epidemiological_data <- function(prefer_db = TRUE, allow_mock_fallback = FA
   }
 
   if (!allow_mock_fallback) {
+    detailed_reason <- if (!is.null(db_error)) {
+      paste("Erro da conexão/consulta:", db_error)
+    } else if (db_empty) {
+      "A consulta foi executada, mas não retornou dados válidos para o painel."
+    } else {
+      "A função de carga não retornou dados."
+    }
+
     stop(
       paste(
         "Não foi possível carregar dados do banco.",
+        detailed_reason,
         "Como OFTALMO_ALLOW_MOCK está desativado, o app não usará dados simulados."
       )
     )

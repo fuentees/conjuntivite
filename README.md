@@ -52,6 +52,7 @@ O arquivo `functions/ConectDb.R` já vem com defaults, mas você pode sobrescrev
 
 ```bash
 export OFTALMO_DB_HOST="192.168.1.204"
+export OFTALMO_DB_PORT="3306"
 export OFTALMO_DB_NAME="cevesp_2k17"
 export OFTALMO_DB_USER="vfontes"
 export OFTALMO_DB_PASSWORD="Saude@123Oftal"
