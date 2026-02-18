@@ -88,12 +88,14 @@ ui <- tagList(
             align-items: center;
             justify-content: center;
             border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            overflow: hidden;
           }
           .sp-gov-banner-img {
             width: 100%;
-            height: auto;
-            max-height: 112px;
-            object-fit: contain;
+            height: 112px;
+            max-height: none;
+            object-fit: cover;
+            object-position: center;
             display: block;
           }
           .app-container {
@@ -175,7 +177,7 @@ ui <- tagList(
           }
           @media (max-width: 768px) {
             .sp-gov-banner-img {
-              max-height: 72px;
+              height: 72px;
             }
           }
           "
@@ -345,13 +347,7 @@ ui <- tagList(
         ),
         br(),
         layout_columns(
-          col_widths = c(6, 6),
-          card(
-            class = "custom-card",
-            card_header("Diagrama de controle (10 anos, exclui 2011)"),
-            plotlyOutput("grafico_diagrama_controle", height = "350px"),
-            full_screen = TRUE
-          ),
+          col_widths = c(12),
           card(
             class = "custom-card",
             card_header("Casos por GVE"),
@@ -406,12 +402,12 @@ ui <- tagList(
             <h5>Painel de Vigilância Epidemiológica de Conjuntivites</h5>
             <p class='mb-2'>
               Sistema com foco em monitoramento semanal e suporte à decisão com indicadores,
-              canal endêmico, diagrama de controle e mapa interativo.
+              canal endêmico, tendência preditiva e mapa interativo.
             </p>
             <ul>
               <li><strong>Filtros encadeados:</strong> Ano, DRS, GVE e Município.</li>
               <li><strong>Dados:</strong> integração com MariaDB (com opção de fallback via variável de ambiente).</li>
-              <li><strong>Análises:</strong> série temporal, canal endêmico, diagrama de controle, tendência e alerta preditivo de surtos.</li>
+              <li><strong>Análises:</strong> série temporal, canal endêmico, tendência e alerta preditivo de surtos.</li>
               <li><strong>Painel operacional:</strong> sexo, faixa etária, ações/treinamentos e tabela de municípios com alerta visual.</li>
             </ul>
             "

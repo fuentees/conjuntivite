@@ -14,16 +14,16 @@ Aplicativo Shiny para monitoramento semanal de conjuntivites com interface moder
 - Gráficos interativos (plotly):
   1. Série temporal por semana epidemiológica (barras)
   2. Canal endêmico (média histórica + limites + ano selecionado, com referência sem 2011)
-  3. Diagrama de controle (base de 10 anos, excluindo 2011; CL/UCL/LCL com 3DP)
-  4. Casos por GVE
-  5. Modelo de tendência semanal com projeção curta
-  6. Motor preditivo de risco de surto (IA explicável)
-  7. Distribuição por sexo e faixa etária
-  8. Ações/treinamentos realizados
+  3. Casos por GVE
+  4. Modelo de tendência semanal com projeção curta
+  5. Motor preditivo de risco de surto (IA explicável)
+  6. Distribuição por sexo e faixa etária
+  7. Ações/treinamentos realizados
 - Mapa interativo territorial (leaflet):
   - Níveis: Município, GVE e DRS
   - Vinculado aos filtros de Ano, DRS, GVE e Município
   - Cores por faixa de incidência (derivadas da tabela de municípios)
+  - Clique no município aplica filtro automático de município no painel
   - Prioriza shapefile local por nível
   - Fallback automático para geobr (município) ou marcadores (sem shape)
 - Tabela interativa de municípios:
