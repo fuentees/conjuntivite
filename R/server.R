@@ -441,19 +441,172 @@ server <- function(input, output, session) {
       )
   })
 
-  output$mapa <- renderLeaflet({
-    df_mapa <- dados_filtrados() %>%
-      group_by(municipio) %>%
+  safe_weighted_mean <- function(x, w) {
+    valid <- is.finite(x) & is.finite(w) & w > 0
+    if (!any(valid)) {
+      return(mean(x, na.rm = TRUE))
+    }
+    stats::weighted.mean(x[valid], w[valid], na.rm = TRUE)
+  }
+
+  nivel_mapa_atual <- reactive({
+    nivel <- input$nivel_mapa
+    if (is.null(nivel) || !(nivel %in% c("municipio", "gve", "drs"))) {
+      return("municipio")
+    }
+    nivel
+  })
+
+  dados_mapa_nivel <- reactive({
+    df <- dados_filtrados()
+    nivel <- nivel_mapa_atual()
+
+    if (nrow(df) == 0) {
+      return(
+        tibble::tibble(
+          rotulo = character(),
+          map_key = character(),
+          casos = numeric(),
+          populacao = numeric(),
+          incidencia = numeric()
+        )
+      )
+    }
+
+    base_pop <- df %>%
+      distinct(drs, gve, municipio, populacao)
+
+    if (nivel == "municipio") {
+      return(
+        df %>%
+          group_by(municipio) %>%
+          summarise(
+            casos = sum(casos, na.rm = TRUE),
+            populacao = max(populacao, na.rm = TRUE),
+            .groups = "drop"
+          ) %>%
+          mutate(
+            populacao = ifelse(is.infinite(populacao), NA_real_, populacao),
+            incidencia = ifelse(populacao > 0, (casos / populacao) * 100000, NA_real_),
+            rotulo = municipio,
+            map_key = normalize_shape_key(rotulo, level = "municipio")
+          ) %>%
+          select(rotulo, map_key, casos, populacao, incidencia)
+      )
+    }
+
+    if (nivel == "gve") {
+      casos_nivel <- df %>%
+        group_by(gve) %>%
+        summarise(casos = sum(casos, na.rm = TRUE), .groups = "drop")
+
+      pop_nivel <- base_pop %>%
+        group_by(gve) %>%
+        summarise(populacao = sum(populacao, na.rm = TRUE), .groups = "drop")
+
+      return(
+        casos_nivel %>%
+          left_join(pop_nivel, by = "gve") %>%
+          mutate(
+            populacao = ifelse(populacao <= 0, NA_real_, populacao),
+            incidencia = ifelse(populacao > 0, (casos / populacao) * 100000, NA_real_),
+            rotulo = gve,
+            map_key = normalize_shape_key(rotulo, level = "gve")
+          ) %>%
+          select(rotulo, map_key, casos, populacao, incidencia)
+      )
+    }
+
+    casos_nivel <- df %>%
+      group_by(drs) %>%
+      summarise(casos = sum(casos, na.rm = TRUE), .groups = "drop")
+
+    pop_nivel <- base_pop %>%
+      group_by(drs) %>%
+      summarise(populacao = sum(populacao, na.rm = TRUE), .groups = "drop")
+
+    casos_nivel %>%
+      left_join(pop_nivel, by = "drs") %>%
+      mutate(
+        populacao = ifelse(populacao <= 0, NA_real_, populacao),
+        incidencia = ifelse(populacao > 0, (casos / populacao) * 100000, NA_real_),
+        rotulo = drs,
+        map_key = normalize_shape_key(rotulo, level = "drs")
+      ) %>%
+      select(rotulo, map_key, casos, populacao, incidencia)
+  })
+
+  pontos_base_mapa <- reactive({
+    nivel <- nivel_mapa_atual()
+    df_filtrado <- dados_filtrados()
+
+    base <- df_filtrado %>%
+      distinct(drs, gve, municipio, populacao) %>%
+      left_join(get_municipio_coords(df_filtrado$municipio), by = "municipio") %>%
+      filter(is.finite(lat), is.finite(lng))
+
+    if (nrow(base) == 0) {
+      return(tibble::tibble(rotulo = character(), lat = numeric(), lng = numeric()))
+    }
+
+    if (nivel == "municipio") {
+      return(
+        base %>%
+          group_by(municipio) %>%
+          summarise(
+            lat = mean(lat, na.rm = TRUE),
+            lng = mean(lng, na.rm = TRUE),
+            .groups = "drop"
+          ) %>%
+          transmute(rotulo = municipio, lat, lng)
+      )
+    }
+
+    if (nivel == "gve") {
+      return(
+        base %>%
+          group_by(gve) %>%
+          summarise(
+            lat = safe_weighted_mean(lat, populacao),
+            lng = safe_weighted_mean(lng, populacao),
+            .groups = "drop"
+          ) %>%
+          transmute(rotulo = gve, lat, lng)
+      )
+    }
+
+    base %>%
+      group_by(drs) %>%
       summarise(
-        casos = sum(casos, na.rm = TRUE),
-        populacao = max(populacao, na.rm = TRUE),
+        lat = safe_weighted_mean(lat, populacao),
+        lng = safe_weighted_mean(lng, populacao),
         .groups = "drop"
       ) %>%
-      mutate(
-        populacao = ifelse(is.infinite(populacao), NA_real_, populacao),
-        incidencia = ifelse(populacao > 0, (casos / populacao) * 100000, NA_real_),
-        municipio_norm = normalize_key(municipio)
-      )
+      transmute(rotulo = drs, lat, lng)
+  })
+
+  output$fonte_geografica <- renderText({
+    nivel <- nivel_mapa_atual()
+    shape_local <- get_local_shape_layer(nivel)
+
+    if (!is.null(shape_local)) {
+      shp_name <- basename(attr(shape_local, "shape_path"))
+      return(paste("Fonte geográfica: shape local (", shp_name, ")", sep = ""))
+    }
+
+    if (nivel == "municipio") {
+      shp_muni_fallback <- get_sp_municipality_shapes()
+      if (!is.null(shp_muni_fallback) && nrow(shp_muni_fallback) > 0) {
+        return("Fonte geográfica: geobr (fallback)")
+      }
+    }
+
+    "Fonte geográfica: pontos estimados (sem shape)"
+  })
+
+  output$mapa <- renderLeaflet({
+    nivel <- nivel_mapa_atual()
+    df_mapa <- dados_mapa_nivel()
 
     if (nrow(df_mapa) == 0) {
       return(
@@ -463,7 +616,6 @@ server <- function(input, output, session) {
       )
     }
 
-    shapes <- get_sp_municipality_shapes()
     inc_values <- df_mapa$incidencia[is.finite(df_mapa$incidencia)]
     if (length(inc_values) == 0) {
       inc_values <- c(0, 1)
@@ -475,18 +627,45 @@ server <- function(input, output, session) {
       na.color = "#f2f4f6"
     )
 
-    if (!is.null(shapes) && nrow(shapes) > 0) {
-      shp_join <- shapes %>%
-        left_join(df_mapa, by = "municipio_norm")
+    local_shape <- get_local_shape_layer(nivel)
+    shape_source <- "local"
+
+    if (is.null(local_shape) && nivel == "municipio") {
+      geobr_shape <- get_sp_municipality_shapes()
+      if (!is.null(geobr_shape) && nrow(geobr_shape) > 0) {
+        local_shape <- geobr_shape %>%
+          mutate(
+            map_key = municipio_norm,
+            map_label = name_muni
+          )
+        shape_source <- "geobr"
+      }
+    }
+
+    if (!is.null(local_shape) && nrow(local_shape) > 0) {
+      shp_join <- local_shape %>%
+        left_join(df_mapa, by = "map_key")
+
+      shp_join$label_exibicao <- ifelse(
+        is.na(shp_join$rotulo) | shp_join$rotulo == "",
+        as.character(shp_join$map_label),
+        shp_join$rotulo
+      )
 
       shp_join$tooltip <- ifelse(
         is.na(shp_join$casos),
-        paste0(shp_join$name_muni, "<br>Sem notificações"),
+        paste0("<strong>", shp_join$label_exibicao, "</strong><br>Sem notificações para os filtros"),
         paste0(
-          "<strong>", shp_join$name_muni, "</strong><br>",
+          "<strong>", shp_join$label_exibicao, "</strong><br>",
           "Casos: ", format(round(shp_join$casos), big.mark = ".", decimal.mark = ","), "<br>",
           "Incidência: ", format(round(shp_join$incidencia, 2), decimal.mark = ","), "/100 mil"
         )
+      )
+
+      titulo_legenda <- ifelse(
+        shape_source == "local",
+        "Incidência (/100 mil)",
+        "Incidência (/100 mil) - fallback"
       )
 
       return(
@@ -504,15 +683,32 @@ server <- function(input, output, session) {
           addLegend(
             pal = pal,
             values = inc_values,
-            title = "Incidência (/100 mil)",
+            title = titulo_legenda,
             position = "bottomright",
             opacity = 0.9
           )
       )
     }
 
+    pontos_base <- pontos_base_mapa()
     pontos <- df_mapa %>%
-      left_join(get_municipio_coords(df_mapa$municipio), by = "municipio")
+      left_join(pontos_base, by = "rotulo") %>%
+      filter(is.finite(lat), is.finite(lng))
+
+    if (nrow(pontos) == 0) {
+      return(
+        leaflet() %>%
+          addProviderTiles("CartoDB.Positron") %>%
+          setView(lng = -48.0, lat = -22.5, zoom = 6)
+      )
+    }
+
+    titulo_nivel <- switch(
+      nivel,
+      municipio = "Município",
+      gve = "GVE",
+      drs = "DRS"
+    )
 
     leaflet(pontos) %>%
       addProviderTiles("CartoDB.Positron") %>%
@@ -527,7 +723,7 @@ server <- function(input, output, session) {
         fillColor = ~pal(incidencia),
         fillOpacity = 0.85,
         popup = ~paste0(
-          "<strong>", municipio, "</strong><br>",
+          "<strong>", titulo_nivel, ": ", rotulo, "</strong><br>",
           "Casos: ", format(round(casos), big.mark = ".", decimal.mark = ","), "<br>",
           "Incidência: ", format(round(incidencia, 2), decimal.mark = ","), "/100 mil"
         )
@@ -535,7 +731,7 @@ server <- function(input, output, session) {
       addLegend(
         pal = pal,
         values = inc_values,
-        title = "Incidência (/100 mil)",
+        title = paste0("Incidência (/100 mil) - ", toupper(nivel)),
         position = "bottomright",
         opacity = 0.9
       )

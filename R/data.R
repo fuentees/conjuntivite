@@ -47,6 +47,7 @@ gve_municipio_mapping <- list(
 
 known_gves <- unlist(drs_gve_mapping, use.names = FALSE)
 gve_drs_lookup <- setNames(rep(names(drs_gve_mapping), lengths(drs_gve_mapping)), known_gves)
+known_drs <- unique(names(drs_gve_mapping))
 
 municipio_populacao <- c(
   "São Paulo" = 11451999,
@@ -80,6 +81,7 @@ normalize_key <- function(x) {
 }
 
 known_gve_lookup <- setNames(known_gves, normalize_key(known_gves))
+known_drs_lookup <- setNames(known_drs, normalize_key(known_drs))
 known_municipios <- unique(unlist(gve_municipio_mapping, use.names = FALSE))
 known_municipio_lookup <- setNames(known_municipios, normalize_key(known_municipios))
 
@@ -112,6 +114,25 @@ standardize_gve <- function(gve_raw) {
     fallback[fallback == "" | is.na(fallback)] <- "Não informado"
     needs_prefix <- !grepl("^gve\\b", tolower(fallback))
     fallback[needs_prefix] <- paste("GVE", fallback[needs_prefix])
+    result[missing] <- fallback
+  }
+
+  result
+}
+
+standardize_drs <- function(drs_raw) {
+  drs_raw <- as.character(drs_raw)
+  key <- normalize_key(drs_raw)
+
+  result <- known_drs_lookup[key]
+  result <- as.character(result)
+
+  missing <- is.na(result) | result == ""
+  if (any(missing)) {
+    fallback <- trimws(drs_raw[missing])
+    fallback[fallback == "" | is.na(fallback)] <- "Não informado"
+    needs_prefix <- !grepl("^drs\\b", tolower(fallback))
+    fallback[needs_prefix] <- paste("DRS", fallback[needs_prefix])
     result[missing] <- fallback
   }
 
@@ -165,6 +186,164 @@ map_drs_from_gve <- function(gve, drs_raw = NULL) {
   drs_from_gve[is.na(drs_from_gve)] <- "DRS Não informado"
   drs_from_gve
 }
+
+shape_file_envvars <- c(
+  municipio = "MAPA_SHAPE_MUNICIPIO",
+  gve = "MAPA_SHAPE_GVE",
+  drs = "MAPA_SHAPE_DRS"
+)
+
+shape_default_paths <- c(
+  municipio = file.path("shapes", "municipio", "municipio.shp"),
+  gve = file.path("shapes", "gve", "gve.shp"),
+  drs = file.path("shapes", "drs", "drs.shp")
+)
+
+find_shape_file <- function(level = c("municipio", "gve", "drs")) {
+  level <- match.arg(level)
+  env_name <- unname(shape_file_envvars[level])
+  configured_path <- Sys.getenv(env_name, unset = "")
+
+  candidates <- c(configured_path, unname(shape_default_paths[level]))
+  candidates <- candidates[candidates != ""]
+
+  for (path in unique(candidates)) {
+    if (file.exists(path) && grepl("\\.shp$", path, ignore.case = TRUE)) {
+      return(path)
+    }
+  }
+
+  default_dir <- dirname(unname(shape_default_paths[level]))
+  if (!dir.exists(default_dir)) {
+    return(NULL)
+  }
+
+  shp_files <- list.files(
+    path = default_dir,
+    pattern = "\\.shp$",
+    full.names = TRUE,
+    ignore.case = TRUE
+  )
+
+  if (length(shp_files) == 0) {
+    return(NULL)
+  }
+
+  shp_files[1]
+}
+
+get_shape_candidate_columns <- function(level = c("municipio", "gve", "drs")) {
+  level <- match.arg(level)
+
+  switch(
+    level,
+    municipio = c(
+      "municipio", "municipio_nome", "municipio_nm", "name_muni",
+      "nm_mun", "nm_municip", "nome", "name"
+    ),
+    gve = c(
+      "gve", "dominio_gve", "nome_gve", "nm_gve", "grupo_vigilancia",
+      "grupo_vig", "name", "nome"
+    ),
+    drs = c(
+      "drs", "nome_drs", "nm_drs", "diretoria_regional",
+      "regional_saude", "name", "nome"
+    )
+  )
+}
+
+guess_shape_key_column <- function(shp, level = c("municipio", "gve", "drs")) {
+  level <- match.arg(level)
+  candidates <- get_shape_candidate_columns(level)
+
+  cols <- names(shp)
+  cols_lower <- tolower(cols)
+  idx <- match(tolower(candidates), cols_lower)
+  idx <- idx[!is.na(idx)]
+
+  if (length(idx) > 0) {
+    return(cols[idx[1]])
+  }
+
+  # Fallback para primeira coluna textual quando o nome da chave não for conhecido.
+  char_cols <- cols[vapply(shp, function(x) is.character(x) || is.factor(x), logical(1))]
+  if (length(char_cols) > 0) {
+    return(char_cols[1])
+  }
+
+  NULL
+}
+
+normalize_shape_key <- function(values, level = c("municipio", "gve", "drs")) {
+  level <- match.arg(level)
+
+  standardized <- switch(
+    level,
+    municipio = standardize_municipio(values),
+    gve = standardize_gve(values),
+    drs = standardize_drs(values)
+  )
+
+  normalize_key(standardized)
+}
+
+get_local_shape_layer <- local({
+  cache <- new.env(parent = emptyenv())
+
+  function(level = c("municipio", "gve", "drs")) {
+    level <- match.arg(level)
+
+    if (!requireNamespace("sf", quietly = TRUE)) {
+      return(NULL)
+    }
+
+    shp_path <- find_shape_file(level)
+    if (is.null(shp_path)) {
+      return(NULL)
+    }
+
+    file_info <- file.info(shp_path)
+    cache_key <- paste(level, shp_path, as.character(file_info$mtime), sep = "::")
+
+    if (exists(cache_key, envir = cache, inherits = FALSE)) {
+      return(get(cache_key, envir = cache, inherits = FALSE))
+    }
+
+    shp <- tryCatch(
+      {
+        sf::st_read(
+          dsn = shp_path,
+          quiet = TRUE,
+          stringsAsFactors = FALSE,
+          options = "ENCODING=UTF-8"
+        )
+      },
+      error = function(e) NULL
+    )
+
+    if (is.null(shp) || nrow(shp) == 0) {
+      return(NULL)
+    }
+
+    key_col <- guess_shape_key_column(shp, level)
+    if (is.null(key_col)) {
+      return(NULL)
+    }
+
+    shp <- shp %>%
+      mutate(
+        map_key = normalize_shape_key(.data[[key_col]], level = level),
+        map_label = as.character(.data[[key_col]])
+      )
+
+    attr(shp, "shape_level") <- level
+    attr(shp, "shape_path") <- shp_path
+    attr(shp, "shape_key_column") <- key_col
+
+    assign(cache_key, shp, envir = cache)
+    shp
+  }
+})
 
 parse_notification_date <- function(value) {
   value <- as.character(value)

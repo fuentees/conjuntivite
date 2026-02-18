@@ -218,8 +218,23 @@ ui <- tagList(
         br(),
         card(
           class = "custom-card overflow-hidden",
-          card_header("Mapa interativo por município"),
-          leafletOutput("mapa", height = "620px"),
+          card_header("Mapa interativo territorial"),
+          card_body(
+            layout_columns(
+              col_widths = c(4, 8),
+              selectInput(
+                "nivel_mapa",
+                label = "Nível geográfico do mapa",
+                choices = c("Município" = "municipio", "GVE" = "gve", "DRS" = "drs"),
+                selected = "municipio"
+              ),
+              div(
+                class = "d-flex justify-content-end align-items-end h-100",
+                span(textOutput("fonte_geografica", inline = TRUE), class = "text-chip")
+              )
+            ),
+            leafletOutput("mapa", height = "620px")
+          ),
           full_screen = TRUE
         )
       )

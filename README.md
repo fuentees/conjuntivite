@@ -16,9 +16,11 @@ Aplicativo Shiny para monitoramento semanal de conjuntivites com interface moder
   2. Canal endêmico (média histórica + limites + ano selecionado)
   3. Diagrama de controle
   4. Casos por GVE
-- Mapa interativo por município (leaflet):
-  - Coroplético com polígonos quando `geobr` + `sf` estiverem disponíveis
-  - Fallback automático para marcadores quando o shape não estiver disponível
+- Mapa interativo territorial (leaflet):
+  - Níveis: Município, GVE e DRS
+  - Vinculado aos filtros de Ano, DRS, GVE e Município
+  - Prioriza shapefile local por nível
+  - Fallback automático para geobr (município) ou marcadores (sem shape)
 
 ## Fonte de dados
 
@@ -62,6 +64,32 @@ shiny::runApp(".")
 > `geobr` e `sf` são recomendados para coroplético com polígonos.
 > Sem eles, o mapa funciona em modo fallback com marcadores.
 
+## Mapas locais (shapefile)
+
+Você pode colocar os arquivos geográficos locais para cada nível:
+
+- `shapes/municipio/`
+- `shapes/gve/`
+- `shapes/drs/`
+
+Arquivos esperados na pasta da camada:
+
+- `.shp`
+- `.shx`
+- `.dbf`
+- `.prj` (recomendado)
+- `.qix` (opcional)
+
+Também é possível informar caminho via variável de ambiente:
+
+```bash
+export MAPA_SHAPE_MUNICIPIO="/caminho/municipios.shp"
+export MAPA_SHAPE_GVE="/caminho/gve.shp"
+export MAPA_SHAPE_DRS="/caminho/drs.shp"
+```
+
+Mais detalhes em `shapes/README.md`.
+
 ## Estrutura
 
 ```text
@@ -73,6 +101,13 @@ project/
 │   ├── data.R         # ingestão (DB + mock), transformação e utilitários
 │   ├── ui.R           # interface
 │   └── server.R       # reatividade, indicadores e gráficos
+├── shapes/
+│   ├── municipio/      # shapefile de município (opcional)
+│   ├── gve/            # shapefile de GVE (opcional)
+│   ├── drs/            # shapefile de DRS (opcional)
+│   └── README.md
+├── www/
+│   └── banner_governo_sp.svg
 └── README.md
 ```
 
