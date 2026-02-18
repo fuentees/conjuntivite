@@ -24,14 +24,21 @@ Aplicativo Shiny para monitoramento semanal de conjuntivites com interface moder
 
 ## Fonte de dados
 
-O app tenta carregar dados do banco MariaDB (`OftalmoNotifica9a60`) usando `functions/ConectDb.R`.
-Se a conexão falhar, usa automaticamente dados simulados (mock data), sem interromper o painel.
+O app carrega dados do banco MariaDB (`OftalmoNotifica9a60`) usando `functions/ConectDb.R`.
+
+Por padrão, o app está em modo **DB-first estrito** (sem mock).
+Se você quiser liberar fallback para dados simulados, configure:
+
+```bash
+export OFTALMO_ALLOW_MOCK="true"
+```
 
 ### Campos esperados da base
 
 - `DtNotificacao` (data de notificação)
 - `MunicipioNotificacao` (município)
 - `dominio_gve` (GVE)
+- `dominio_drs` (DRS, quando disponível)
 - `TotalCaso` (casos)
 - `NuSurto` e/ou `Surto` (informações de surto)
 

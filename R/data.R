@@ -101,6 +101,35 @@ title_case_safe <- function(x) {
   tools::toTitleCase(tolower(x))
 }
 
+sanitize_dimension_values <- function(values, default = "Não informado") {
+  values <- trimws(as.character(values))
+  values[is.na(values) | values == "" | tolower(values) %in% c("na", "n/a", "null")] <- default
+  values
+}
+
+sanitize_numeric_values <- function(values, default = 0) {
+  values <- suppressWarnings(as.numeric(values))
+  values[is.na(values)] <- default
+  values
+}
+
+infer_drs_from_gve_text <- function(gve_values) {
+  gve_values <- as.character(gve_values)
+  extracted <- rep(NA_character_, length(gve_values))
+
+  has_drs <- grepl("\\bDRS\\b", gve_values, ignore.case = TRUE)
+  extracted[has_drs] <- gsub(
+    ".*\\b(DRS\\s*[^\\-|/|;]+).*",
+    "\\1",
+    gve_values[has_drs],
+    ignore.case = TRUE
+  )
+
+  extracted <- trimws(extracted)
+  extracted[extracted == ""] <- NA_character_
+  extracted
+}
+
 standardize_gve <- function(gve_raw) {
   gve_raw <- as.character(gve_raw)
   key <- normalize_key(gve_raw)
@@ -371,27 +400,35 @@ prepare_oftalmo_dataset <- function(raw_data) {
   }
 
   date_col <- pick_existing_column(raw_data, c("DtNotificacao", "dt_notificacao", "data_notificacao"))
+  ano_col <- pick_existing_column(raw_data, c("ano", "Ano", "AnoNotificacao", "ano_notificacao"))
+  semana_col <- pick_existing_column(raw_data, c("semana", "Semana", "SE", "SemanaEpidemiologica", "semana_epidemiologica"))
   municipio_col <- pick_existing_column(raw_data, c("MunicipioNotificacao", "municipio_notificacao", "municipio"))
   gve_col <- pick_existing_column(raw_data, c("dominio_gve", "gve"))
-  drs_col <- pick_existing_column(raw_data, c("drs", "DRS"))
-  casos_col <- pick_existing_column(raw_data, c("TotalCaso", "total_caso", "casos"))
+  drs_col <- pick_existing_column(raw_data, c("dominio_drs", "drs", "DRS"))
+  casos_col <- pick_existing_column(raw_data, c("TotalCaso", "total_caso", "casos", "totalcaso"))
   surto_col <- pick_existing_column(raw_data, c("NuSurto", "nu_surto"))
   surto_flag_col <- pick_existing_column(raw_data, c("Surto", "surto"))
 
-  if (is.null(date_col) || is.null(municipio_col) || is.null(casos_col)) {
+  if (is.null(municipio_col) || is.null(gve_col) || is.null(casos_col)) {
     return(NULL)
   }
 
   df <- raw_data %>%
     mutate(
-      data_notificacao = parse_notification_date(.data[[date_col]]),
-      municipio = standardize_municipio(.data[[municipio_col]]),
-      gve = if (!is.null(gve_col)) standardize_gve(.data[[gve_col]]) else "GVE Não informado",
-      drs = if (!is.null(drs_col)) as.character(.data[[drs_col]]) else NA_character_,
-      drs = map_drs_from_gve(gve, drs),
-      casos = suppressWarnings(as.numeric(.data[[casos_col]])),
+      data_notificacao = if (!is.null(date_col)) parse_notification_date(.data[[date_col]]) else as.Date(NA),
+      ano_registro = if (!is.null(ano_col)) suppressWarnings(as.integer(.data[[ano_col]])) else NA_integer_,
+      semana_registro = if (!is.null(semana_col)) suppressWarnings(as.integer(.data[[semana_col]])) else NA_integer_,
+      municipio = sanitize_dimension_values(.data[[municipio_col]]),
+      gve = sanitize_dimension_values(.data[[gve_col]]),
+      drs = if (!is.null(drs_col)) sanitize_dimension_values(.data[[drs_col]]) else "Não informado",
+      drs = ifelse(
+        drs == "Não informado",
+        sanitize_dimension_values(infer_drs_from_gve_text(gve), default = "Não informado"),
+        drs
+      ),
+      casos = sanitize_numeric_values(.data[[casos_col]], default = 0),
       casos = ifelse(is.na(casos), 0, pmax(round(casos), 0)),
-      surto_n = if (!is.null(surto_col)) suppressWarnings(as.numeric(.data[[surto_col]])) else 0,
+      surto_n = if (!is.null(surto_col)) sanitize_numeric_values(.data[[surto_col]], default = 0) else 0,
       surto_n = ifelse(is.na(surto_n), 0, pmax(round(surto_n), 0)),
       surto_flag = if (!is.null(surto_flag_col)) {
         ifelse(tolower(as.character(.data[[surto_flag_col]])) %in% c("1", "true", "sim", "s"), 1, 0)
@@ -399,14 +436,14 @@ prepare_oftalmo_dataset <- function(raw_data) {
         0
       }
     ) %>%
-    filter(!is.na(data_notificacao)) %>%
     mutate(
-      ano = year(data_notificacao),
-      semana = isoweek(data_notificacao),
+      ano = dplyr::coalesce(ano_registro, year(data_notificacao)),
+      semana = dplyr::coalesce(semana_registro, isoweek(data_notificacao)),
       semana = pmin(pmax(semana, 1), 53),
       populacao = infer_population(municipio),
       surtos = surto_n + surto_flag
     ) %>%
+    filter(!is.na(ano), !is.na(semana)) %>%
     group_by(ano, semana, drs, gve, municipio, populacao) %>%
     summarise(
       casos = sum(casos, na.rm = TRUE),
@@ -463,7 +500,7 @@ generate_mock_data <- function() {
   dados
 }
 
-load_epidemiological_data <- function(prefer_db = TRUE) {
+load_epidemiological_data <- function(prefer_db = TRUE, allow_mock_fallback = FALSE) {
   if (prefer_db && exists("load_oftalmo_raw_data", mode = "function")) {
     db_data <- tryCatch(
       {
@@ -479,12 +516,25 @@ load_epidemiological_data <- function(prefer_db = TRUE) {
     }
   }
 
+  if (!allow_mock_fallback) {
+    stop(
+      paste(
+        "Não foi possível carregar dados do banco.",
+        "Como OFTALMO_ALLOW_MOCK está desativado, o app não usará dados simulados."
+      )
+    )
+  }
+
   mock_data <- generate_mock_data()
   attr(mock_data, "data_source") <- "mock"
   mock_data
 }
 
-dados_epidemiologicos <- load_epidemiological_data(prefer_db = TRUE)
+allow_mock_fallback <- tolower(Sys.getenv("OFTALMO_ALLOW_MOCK", unset = "false")) %in% c("1", "true", "sim", "yes")
+dados_epidemiologicos <- load_epidemiological_data(
+  prefer_db = TRUE,
+  allow_mock_fallback = allow_mock_fallback
+)
 dados_fonte <- attr(dados_epidemiologicos, "data_source")
 
 get_gve_by_drs <- function(drs) {

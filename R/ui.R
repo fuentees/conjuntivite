@@ -336,7 +336,7 @@ ui <- tagList(
             </p>
             <ul>
               <li><strong>Filtros encadeados:</strong> Ano, DRS, GVE e Município.</li>
-              <li><strong>Dados:</strong> integração com MariaDB e fallback automático para mock data.</li>
+              <li><strong>Dados:</strong> integração com MariaDB (com opção de fallback via variável de ambiente).</li>
               <li><strong>Análises:</strong> série temporal, canal endêmico, surtos e situação epidemiológica.</li>
             </ul>
             "
