@@ -126,6 +126,9 @@ ui <- tagList(
             z-index: 20;
             overflow: visible !important;
           }
+          .filter-card .card-body {
+            overflow: visible !important;
+          }
           .filter-card .shiny-input-container,
           .filter-card .selectize-control {
             z-index: 30;
@@ -188,22 +191,26 @@ ui <- tagList(
                 "filtro_ano",
                 label = "Ano",
                 choices = c("Todos", as.character(anos_disponiveis)),
-                selected = "Todos"
+                selected = "Todos",
+                selectize = FALSE
               ),
               selectInput(
                 "filtro_drs",
                 label = "DRS",
-                choices = c("Todas", drs_disponiveis)
+                choices = c("Todas", drs_disponiveis),
+                selectize = FALSE
               ),
               selectInput(
                 "filtro_gve",
                 label = "GVE",
-                choices = "Todas"
+                choices = "Todas",
+                selectize = FALSE
               ),
               selectInput(
                 "filtro_municipio",
                 label = "Município",
-                choices = "Todos"
+                choices = "Todos",
+                selectize = FALSE
               ),
               div(
                 class = "d-flex align-items-end h-100",

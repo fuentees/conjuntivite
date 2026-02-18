@@ -518,16 +518,16 @@ server <- function(input, output, session) {
       x = ~semana,
       y = ~casos,
       type = "scatter",
-      mode = "markers",
-      name = "Casos semanais",
-      marker = list(size = 8, color = "#1f77b4", opacity = 0.75)
+      mode = "lines",
+      name = paste0("Ano atual (", selected_year(), ")"),
+      line = list(color = "#7b1fa2", width = 2.4)
     ) %>%
       add_trace(
         x = ~semana,
         y = ~CL,
         type = "scatter",
         mode = "lines",
-        name = "CL (Média)",
+        name = "Média (CL)",
         line = list(color = "#2e7d32", width = 2)
       ) %>%
       add_trace(
@@ -535,25 +535,16 @@ server <- function(input, output, session) {
         y = ~UCL,
         type = "scatter",
         mode = "lines",
-        name = "UCL (Média + 3DP)",
-        line = list(color = "#d32f2f", dash = "dash", width = 1.6)
+        name = "Limite superior (UCL)",
+        line = list(color = "#d32f2f", dash = "dash", width = 1.7)
       ) %>%
       add_trace(
         x = ~semana,
         y = ~LCL,
         type = "scatter",
         mode = "lines",
-        name = "LCL (Média - 3DP)",
-        line = list(color = "#ef6c00", dash = "dot", width = 1.6)
-      ) %>%
-      add_trace(
-        data = serie %>% filter(acima_ucl),
-        x = ~semana,
-        y = ~casos,
-        type = "scatter",
-        mode = "markers",
-        name = "Acima do UCL",
-        marker = list(size = 10, color = "#d32f2f", symbol = "circle")
+        name = "Limite inferior (LCL)",
+        line = list(color = "#1565c0", dash = "dot", width = 1.7)
       ) %>%
       layout(
         hovermode = "x unified",
