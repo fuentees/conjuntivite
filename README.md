@@ -173,6 +173,7 @@ project/
 - DRS -> atualiza GVE
 - GVE -> atualiza Município
 - Município São Paulo -> exibe filtro adicional de UVIS
+- Bloco "Casos por território": mostra por GVE quando filtro GVE = Todas; ao selecionar um GVE, passa a mostrar por município.
 - Todos os gráficos, indicadores e mapa reagem aos filtros em tempo real.
 
 ## Stack

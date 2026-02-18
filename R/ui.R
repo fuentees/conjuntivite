@@ -350,7 +350,7 @@ ui <- tagList(
           col_widths = c(12),
           card(
             class = "custom-card",
-            card_header("Casos por GVE"),
+            card_header(textOutput("titulo_grafico_casos_territorio", inline = TRUE)),
             plotlyOutput("grafico_casos_gve", height = "350px"),
             full_screen = TRUE
           )

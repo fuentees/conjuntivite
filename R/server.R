@@ -559,30 +559,59 @@ server <- function(input, output, session) {
       )
   })
 
+  output$titulo_grafico_casos_territorio <- renderText({
+    if (!is.null(input$filtro_gve) && input$filtro_gve != "Todas") {
+      paste0("Total de casos por município — ", input$filtro_gve)
+    } else {
+      "Total de casos por GVE"
+    }
+  })
+
   output$grafico_casos_gve <- renderPlotly({
-    df <- dados_ano_referencia() %>%
-      group_by(gve) %>%
-      summarise(casos = sum(casos, na.rm = TRUE), .groups = "drop") %>%
-      arrange(desc(casos))
+    df_base <- dados_ano_referencia()
+    gve_especifico <- !is.null(input$filtro_gve) && input$filtro_gve != "Todas"
+
+    if (gve_especifico) {
+      df <- df_base %>%
+        group_by(municipio) %>%
+        summarise(casos = sum(casos, na.rm = TRUE), .groups = "drop") %>%
+        mutate(categoria = municipio) %>%
+        arrange(desc(casos))
+
+      msg_empty <- "Sem dados por município para os filtros selecionados"
+      x_title <- "Município"
+      trace_name <- "Casos por município"
+    } else {
+      df <- df_base %>%
+        group_by(gve) %>%
+        summarise(casos = sum(casos, na.rm = TRUE), .groups = "drop") %>%
+        mutate(categoria = gve) %>%
+        arrange(desc(casos))
+
+      msg_empty <- "Sem dados por GVE para os filtros selecionados"
+      x_title <- "GVE"
+      trace_name <- "Casos por GVE"
+    }
 
     if (nrow(df) == 0) {
-      return(empty_plotly("Sem dados por GVE para os filtros selecionados"))
+      return(empty_plotly(msg_empty))
     }
 
     plot_ly(
       df,
-      x = ~reorder(gve, casos),
+      x = ~reorder(categoria, casos),
       y = ~casos,
       type = "bar",
       marker = list(color = "#005ca9", opacity = 0.85),
-      name = "Casos"
+      name = trace_name,
+      hovertemplate = paste0(x_title, ": %{x}<br>Casos: %{y}<extra></extra>")
     ) %>%
       layout(
         showlegend = FALSE,
         margin = list(l = 55, r = 20, t = 10, b = 100),
         plot_bgcolor = "rgba(245,245,245,0.5)",
         paper_bgcolor = "white",
-        xaxis = list(title = "GVE", tickangle = 35, showgrid = FALSE),
+        xaxis = list(title = x_title, tickangle = 35, showgrid = FALSE),
         yaxis = list(title = "Casos", showgrid = TRUE, gridcolor = "#e5e7eb")
       )
   })
