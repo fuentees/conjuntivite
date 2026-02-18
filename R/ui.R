@@ -1,207 +1,238 @@
 custom_theme <- bs_theme(
   version = 5,
   preset = "bootstrap",
-  primary = "#0066cc",
+  primary = "#005ca9",
   secondary = "#6c757d",
-  success = "#4caf50",
-  danger = "#f44336",
-  warning = "#ff9800",
-  info = "#2196f3",
-  light = "#f8f9fa",
-  dark = "#212529",
+  success = "#2e7d32",
+  danger = "#d32f2f",
+  warning = "#ed6c02",
+  info = "#0288d1",
+  light = "#f4f6f8",
+  dark = "#1f2933",
   base_font = font_collection(
     font_google("Inter"),
-    font_google("Segoe UI"),
+    "Segoe UI",
     "sans-serif"
   )
 )
+
+anos_disponiveis <- sort(unique(dados_epidemiologicos$ano), decreasing = TRUE)
+if (length(anos_disponiveis) == 0) {
+  anos_disponiveis <- year(Sys.Date())
+}
 
 ui <- page_navbar(
   theme = custom_theme,
   title = div(
     class = "d-flex align-items-center gap-2",
-    div(style = "width: 40px; height: 40px; background: linear-gradient(135deg, #0066cc 0%, #004d99 100%); border-radius: 8px; display: flex; align-items: center; justify-content: center;",
-        span("🔬", style = "font-size: 20px;")),
     div(
-      h4("Vigilância Epidemiológica", class = "mb-0", style = "font-weight: 600;"),
+      style = "width: 38px; height: 38px; border-radius: 10px; background: linear-gradient(135deg, #005ca9, #1976d2); display:flex; align-items:center; justify-content:center;",
+      icon("eye", style = "color: white;")
+    ),
+    div(
+      div("Painel de Vigilância Epidemiológica", style = "font-weight: 700; line-height: 1.1;"),
       small("Conjuntivites", class = "text-muted")
     )
   ),
+  bg = "#ffffff",
+  inverse = FALSE,
+  underlines = TRUE,
+  collapsible = TRUE,
+  header = tags$head(
+    tags$style(
+      HTML(
+        "
+        .app-container {
+          background: #f4f6f8;
+          min-height: calc(100vh - 56px);
+          padding-bottom: 2rem;
+        }
+        .filter-card,
+        .custom-card,
+        .value-box {
+          border: 0;
+          border-radius: 16px !important;
+          box-shadow: 0 4px 18px rgba(32, 50, 68, 0.08);
+          transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+        .filter-card:hover,
+        .custom-card:hover,
+        .value-box:hover {
+          transform: translateY(-1px);
+          box-shadow: 0 8px 24px rgba(32, 50, 68, 0.12);
+        }
+        .bslib-value-box .value-box-title {
+          font-size: 0.95rem;
+          font-weight: 600;
+        }
+        .bslib-value-box .value-box-value {
+          font-size: 1.35rem;
+          font-weight: 700;
+        }
+        .text-chip {
+          font-size: 0.8rem;
+          padding: 0.2rem 0.65rem;
+          border-radius: 999px;
+          background: #e8f1fb;
+          color: #005ca9;
+          font-weight: 600;
+        }
+        "
+      )
+    )
+  ),
   nav_panel(
-    "Painel Principal",
-
-    layout_sidebar(
-      sidebar = sidebar(
-        title = "Filtros",
-        open = "always",
-        class = "bg-light",
-
-        input_dark := selectInput(
-          "filtro_ano",
-          label = "Ano",
-          choices = c(2024, 2023, 2022),
-          selected = 2024
-        ),
-
-        selectInput(
-          "filtro_drs",
-          label = "Divisão Regional de Saúde (DRS)",
-          choices = c("Todas", sort(drs_list))
-        ),
-
-        selectInput(
-          "filtro_gve",
-          label = "Grupo de Vigilância Epidemiológica (GVE)",
-          choices = "Todas"
-        ),
-
-        selectInput(
-          "filtro_municipio",
-          label = "Município",
-          choices = "Todos"
-        ),
-
-        hr(class = "my-3"),
-
-        div(
-          class = "d-grid gap-2",
-          actionButton(
-            "btn_reset",
-            "Limpar Filtros",
-            class = "btn-outline-secondary btn-sm",
-            icon = icon("redo")
-          )
-        )
-      ),
-
-      main = navset_card_tab(
-        title = NULL,
-
-        nav_panel(
-          "Indicadores",
-
-          layout_columns(
-            col_widths = c(6, 6, 6, 6),
-
-            value_box(
-              title = "Total de Casos",
-              value = textOutput("total_casos"),
-              theme = "primary",
-              class = "h-100",
-              showcase = icon("chart-bar")
-            ),
-
-            value_box(
-              title = "Incidência",
-              value = textOutput("incidencia_media"),
-              subtitle = "Por 100 mil habitantes",
-              theme = "info",
-              class = "h-100",
-              showcase = icon("percent")
-            ),
-
-            value_box(
-              title = "Número de Surtos",
-              value = textOutput("num_surtos"),
-              subtitle = "Semanas epidêmicas críticas",
-              theme = "warning",
-              class = "h-100",
-              showcase = icon("triangle-exclamation")
-            ),
-
-            value_box(
-              title = "Situação Epidemiológica",
-              value = textOutput("situacao_epidemiologica"),
-              subtitle = textOutput("situacao_descricao"),
-              theme = "danger",
-              class = "h-100",
-              showcase = icon("circle-exclamation")
-            )
-          ),
-
-          br(),
-
-          layout_columns(
-            col_widths = c(12, 12),
-
-            card(
-              card_header("Série Temporal - Casos por Semana Epidemiológica"),
-              plotlyOutput("grafico_serie_temporal", height = "400px"),
-              full_screen = TRUE
-            ),
-
-            card(
-              card_header("Canal Endêmico"),
-              plotlyOutput("grafico_canal_endemico", height = "400px"),
-              full_screen = TRUE
-            )
-          ),
-
-          br(),
-
-          layout_columns(
-            col_widths = c(6, 6),
-
-            card(
-              card_header("Diagrama de Controle"),
-              plotlyOutput("grafico_diagrama_controle", height = "350px"),
-              full_screen = TRUE
-            ),
-
-            card(
-              card_header("Casos por GVE"),
-              plotlyOutput("grafico_casos_gve", height = "350px"),
-              full_screen = TRUE
-            )
-          )
-        ),
-
-        nav_panel(
-          "Mapa",
-
-          card(
-            card_header("Distribuição Geográfica de Casos"),
-            leafletOutput("mapa", height = "700px"),
-            full_screen = TRUE,
-            class = "overflow-hidden"
-          )
-        ),
-
-        nav_panel(
-          "Sobre",
-
-          layout_columns(
-            col_widths = 12,
-
-            card(
-              card_header("Informações do Sistema"),
-              HTML(
-                "
-                <h5>Painel de Vigilância Epidemiológica de Conjuntivites</h5>
-                <p>Sistema de monitoramento em tempo real de casos de conjuntivites com ferramentas
-                avançadas de análise epidemiológica.</p>
-
-                <h6 class='mt-4'>Funcionalidades</h6>
-                <ul>
-                  <li><strong>Filtros Encadeados:</strong> Selecione DRS, GVE e Município com atualização automática</li>
-                  <li><strong>Indicadores Dinâmicos:</strong> Visualize casos, incidência e situação epidemiológica</li>
-                  <li><strong>Gráficos Interativos:</strong> Série temporal, canal endêmico e diagrama de controle</li>
-                  <li><strong>Mapa Coroplético:</strong> Distribuição geográfica com zoom e detalhes</li>
-                </ul>
-
-                <h6 class='mt-4'>Dados</h6>
-                <p>Sistema contém dados simulados para demonstração com histórico de 2022 a 2024.</p>
-              "
+    "Painel",
+    div(
+      class = "app-container",
+      div(
+        class = "container-fluid pt-3",
+        card(
+          class = "filter-card mb-3",
+          card_body(
+            layout_columns(
+              col_widths = c(2, 3, 3, 3, 1),
+              selectInput(
+                "filtro_ano",
+                label = "Ano",
+                choices = anos_disponiveis,
+                selected = anos_disponiveis[1]
+              ),
+              selectInput(
+                "filtro_drs",
+                label = "DRS",
+                choices = c("Todas", sort(unique(dados_epidemiologicos$drs)))
+              ),
+              selectInput(
+                "filtro_gve",
+                label = "GVE",
+                choices = "Todas"
+              ),
+              selectInput(
+                "filtro_municipio",
+                label = "Município",
+                choices = "Todos"
+              ),
+              div(
+                class = "d-flex align-items-end h-100",
+                actionButton(
+                  "btn_reset",
+                  label = "Limpar",
+                  class = "btn-outline-secondary w-100",
+                  icon = icon("rotate-left")
+                )
               )
+            ),
+            div(
+              class = "d-flex justify-content-end mt-1",
+              span(textOutput("fonte_dados", inline = TRUE), class = "text-chip")
             )
+          )
+        ),
+        layout_columns(
+          col_widths = c(3, 3, 3, 3),
+          value_box(
+            title = "Total de casos",
+            value = textOutput("total_casos"),
+            showcase = icon("users"),
+            theme = "primary",
+            class = "h-100"
+          ),
+          value_box(
+            title = "Incidência",
+            value = textOutput("incidencia_media"),
+            subtitle = "Casos por 100 mil hab.",
+            showcase = icon("wave-square"),
+            theme = "info",
+            class = "h-100"
+          ),
+          value_box(
+            title = "Número de surtos",
+            value = textOutput("num_surtos"),
+            subtitle = "Semanas acima do limite",
+            showcase = icon("triangle-exclamation"),
+            theme = "warning",
+            class = "h-100"
+          ),
+          value_box(
+            title = "Situação epidemiológica",
+            value = textOutput("situacao_epidemiologica"),
+            subtitle = textOutput("situacao_descricao"),
+            showcase = icon("circle-exclamation"),
+            theme = "danger",
+            class = "h-100"
+          )
+        ),
+        br(),
+        layout_columns(
+          col_widths = c(6, 6),
+          card(
+            class = "custom-card",
+            card_header("Série temporal — casos por semana epidemiológica"),
+            plotlyOutput("grafico_serie_temporal", height = "360px"),
+            full_screen = TRUE
+          ),
+          card(
+            class = "custom-card",
+            card_header("Canal endêmico"),
+            plotlyOutput("grafico_canal_endemico", height = "360px"),
+            full_screen = TRUE
+          )
+        ),
+        br(),
+        layout_columns(
+          col_widths = c(6, 6),
+          card(
+            class = "custom-card",
+            card_header("Diagrama de controle"),
+            plotlyOutput("grafico_diagrama_controle", height = "350px"),
+            full_screen = TRUE
+          ),
+          card(
+            class = "custom-card",
+            card_header("Casos por GVE"),
+            plotlyOutput("grafico_casos_gve", height = "350px"),
+            full_screen = TRUE
+          )
+        ),
+        br(),
+        card(
+          class = "custom-card overflow-hidden",
+          card_header("Mapa interativo por município"),
+          leafletOutput("mapa", height = "620px"),
+          full_screen = TRUE
+        )
+      )
+    )
+  ),
+  nav_panel(
+    "Sobre",
+    div(
+      class = "container-fluid py-3",
+      card(
+        class = "custom-card",
+        card_header("Sobre o sistema"),
+        card_body(
+          HTML(
+            "
+            <h5>Painel de Vigilância Epidemiológica de Conjuntivites</h5>
+            <p class='mb-2'>
+              Sistema com foco em monitoramento semanal e suporte à decisão com indicadores,
+              canal endêmico, diagrama de controle e mapa interativo.
+            </p>
+            <ul>
+              <li><strong>Filtros encadeados:</strong> Ano, DRS, GVE e Município.</li>
+              <li><strong>Dados:</strong> integração com MariaDB e fallback automático para mock data.</li>
+              <li><strong>Análises:</strong> série temporal, canal endêmico, surtos e situação epidemiológica.</li>
+            </ul>
+            "
           )
         )
       )
     )
   ),
-
   footer = div(
-    class = "text-center text-muted py-3 border-top mt-5 small",
-    "© 2024 Secretaria de Saúde - Vigilância Epidemiológica | Desenvolvido com Shiny e Bootstrap 5"
+    class = "text-center text-muted py-3 border-top small",
+    "Secretaria de Saúde - Vigilância Epidemiológica | Desenvolvido com Shiny"
   )
 )

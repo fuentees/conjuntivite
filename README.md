@@ -1,84 +1,91 @@
 # Painel de Vigilância Epidemiológica de Conjuntivites
 
-Um aplicativo Shiny desenvolvido em R para monitoramento em tempo real de casos de conjuntivites em instituições de saúde.
+Aplicativo Shiny para monitoramento semanal de conjuntivites com interface moderna, filtros encadeados e análise epidemiológica em tempo real.
 
-## Características
+## Destaques
 
-### Interface
-- **Design moderno e responsivo** - Interface limpa com tema azul institucional
-- **Layout horizontal** - Filtros posicionados no topo com Cards informativos
-- **Elementos visuais** - Cantos arredondados, sombras suaves e transições
+- Layout clean, responsivo, tema claro e filtros horizontais no topo.
+- Cards com indicadores principais:
+  - Total de casos
+  - Incidência por 100 mil habitantes
+  - Número de surtos (semanas acima do limite superior)
+  - Situação epidemiológica (Normal / Alerta / Epidemia)
+- Gráficos interativos (plotly):
+  1. Série temporal por semana epidemiológica
+  2. Canal endêmico (média histórica + limites + ano selecionado)
+  3. Diagrama de controle
+  4. Casos por GVE
+- Mapa interativo por município (leaflet):
+  - Coroplético com polígonos quando `geobr` + `sf` estiverem disponíveis
+  - Fallback automático para marcadores quando o shape não estiver disponível
 
-### Filtros Interativos
-- Seleção por Ano
-- Seleção por Divisão Regional de Saúde (DRS)
-- Seleção por Grupo de Vigilância Epidemiológica (GVE) - encadeada ao DRS
-- Seleção por Município - encadeada ao GVE
+## Fonte de dados
 
-### Indicadores
-- **Total de Casos** - Soma de casos no período
-- **Incidência** - Taxa por 100 mil habitantes
-- **Número de Surtos** - Semanas epidêmicas críticas
-- **Situação Epidemiológica** - Normal, Alerta ou Epidemia
+O app tenta carregar dados do banco MariaDB (`OftalmoNotifica9a60`) usando `functions/ConectDb.R`.
+Se a conexão falhar, usa automaticamente dados simulados (mock data), sem interromper o painel.
 
-### Gráficos Interativos
-1. **Série Temporal** - Casos por semana com plotly
-2. **Canal Endêmico** - Limites históricos e ano atual
-3. **Diagrama de Controle** - Análise de variação
-4. **Casos por GVE** - Distribuição por gestão
+### Campos esperados da base
 
-### Mapa
-- Mapa coroplético com leaflet
-- Círculos proporcionais ao número de casos
-- Cores indicando intensidade de incidência
-- Tooltips com informações detalhadas
+- `DtNotificacao` (data de notificação)
+- `MunicipioNotificacao` (município)
+- `dominio_gve` (GVE)
+- `TotalCaso` (casos)
+- `NuSurto` e/ou `Surto` (informações de surto)
+
+Esses campos são transformados para a estrutura interna:
+
+`ano`, `semana`, `drs`, `gve`, `municipio`, `casos`, `populacao`, `incidencia`, `surtos`
+
+## Configuração de conexão (opcional por variável de ambiente)
+
+O arquivo `functions/ConectDb.R` já vem com defaults, mas você pode sobrescrever por ambiente:
+
+```bash
+export OFTALMO_DB_HOST="192.168.1.204"
+export OFTALMO_DB_NAME="cevesp_2k17"
+export OFTALMO_DB_USER="vfontes"
+export OFTALMO_DB_PASSWORD="Saude@123Oftal"
+```
 
 ## Instalação
 
 ```r
-# Instalar dependências
-install.packages(c("shiny", "shinyjs", "dplyr", "ggplot2", "plotly", "leaflet", "lubridate", "tidyr"))
+install.packages(c(
+  "shiny", "bslib", "dplyr", "plotly", "leaflet",
+  "lubridate", "tidyr", "DBI", "RMariaDB", "geobr", "sf"
+))
 
-# Executar o app
 shiny::runApp(".")
 ```
 
-## Estrutura do Projeto
+> `geobr` e `sf` são recomendados para coroplético com polígonos.
+> Sem eles, o mapa funciona em modo fallback com marcadores.
 
-```
+## Estrutura
+
+```text
 project/
-├── app.R              # Arquivo principal que executa o Shiny
+├── app.R
+├── functions/
+│   └── ConectDb.R     # conexão e consulta ao MariaDB
 ├── R/
-│   ├── data.R         # Geração e estrutura dos dados simulados
-│   ├── ui.R           # Interface do usuário
-│   └── server.R       # Lógica reativa do servidor
-└── README.md          # Este arquivo
+│   ├── data.R         # ingestão (DB + mock), transformação e utilitários
+│   ├── ui.R           # interface
+│   └── server.R       # reatividade, indicadores e gráficos
+└── README.md
 ```
 
-## Dados
+## Comportamento reativo
 
-O aplicativo utiliza dados simulados com a seguinte estrutura:
-- **ano**: 2022, 2023, 2024
-- **semana**: 1-52 (Semanas Epidemiológicas)
-- **DRS**: 5 Divisões Regionais
-- **GVE**: 15 Grupos de Vigilância
-- **municipio**: Diversos municípios por GVE
-- **casos**: Número simulado de casos
-- **incidência**: Taxa calculada por 100 mil habitantes
+- DRS -> atualiza GVE
+- GVE -> atualiza Município
+- Todos os gráficos, indicadores e mapa reagem aos filtros em tempo real.
 
-## Funcionalidades Reativas
+## Stack
 
-Todos os elementos reagem automaticamente aos filtros:
-- Filtros encadeados atualizam opções subsequentes
-- Gráficos se atualizam em tempo real
-- Indicadores recalculam automaticamente
-- Mapa filtra e recolore conforme seleção
-
-## Tecnologias
-
-- **R 4.3.0+**
-- **Shiny** - Framework web
-- **Plotly** - Gráficos interativos
-- **Leaflet** - Mapas
-- **dplyr** - Manipulação de dados
-- **ggplot2** - Visualizações estáticas
+- R 4.3+
+- Shiny + bslib
+- dplyr / tidyr / lubridate
+- plotly
+- leaflet
+- DBI + RMariaDB

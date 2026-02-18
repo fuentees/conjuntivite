@@ -1,9 +1,23 @@
 library(dplyr)
 library(lubridate)
+library(tidyr)
+
+if (file.exists("functions/ConectDb.R")) {
+  tryCatch(
+    source("functions/ConectDb.R"),
+    error = function(e) NULL
+  )
+}
 
 set.seed(42)
 
-drs_list <- c("DRS Ribeirão Preto", "DRS Campinas", "DRS São Paulo", "DRS Bauru", "DRS Araçatuba")
+drs_list <- c(
+  "DRS Ribeirão Preto",
+  "DRS Campinas",
+  "DRS São Paulo",
+  "DRS Bauru",
+  "DRS Araçatuba"
+)
 
 drs_gve_mapping <- list(
   "DRS Ribeirão Preto" = c("GVE Ribeirão Preto", "GVE Araraquara", "GVE São Carlos"),
@@ -31,64 +45,342 @@ gve_municipio_mapping <- list(
   "GVE Andradina" = c("Andradina", "Lavínia", "Murutinga do Sul")
 )
 
-generate_mock_data <- function() {
-  data <- expand_grid(
-    ano = c(2022, 2023, 2024),
-    semana = 1:52,
-    drs = drs_list
-  ) %>%
+known_gves <- unlist(drs_gve_mapping, use.names = FALSE)
+gve_drs_lookup <- setNames(rep(names(drs_gve_mapping), lengths(drs_gve_mapping)), known_gves)
+
+municipio_populacao <- c(
+  "São Paulo" = 11451999,
+  "Campinas" = 1207609,
+  "Ribeirão Preto" = 720116,
+  "Sorocaba" = 723574,
+  "Santo André" = 748919,
+  "São Bernardo" = 849874,
+  "Osasco" = 742593,
+  "Piracicaba" = 429905,
+  "Bauru" = 381416,
+  "Araçatuba" = 198129,
+  "Araraquara" = 242228,
+  "São Carlos" = 256915,
+  "Limeira" = 310783,
+  "Jaú" = 151881,
+  "Andradina" = 58000,
+  "Birigui" = 124883,
+  "Diadema" = 429550,
+  "Taboão da Serra" = 293652,
+  "Valinhos" = 131210,
+  "Vinhedo" = 82240
+)
+
+normalize_key <- function(x) {
+  x <- trimws(as.character(x))
+  x <- ifelse(is.na(x), "", x)
+  x <- iconv(x, from = "", to = "ASCII//TRANSLIT")
+  x <- tolower(gsub("[^a-z0-9]+", " ", x))
+  trimws(x)
+}
+
+known_gve_lookup <- setNames(known_gves, normalize_key(known_gves))
+known_municipios <- unique(unlist(gve_municipio_mapping, use.names = FALSE))
+known_municipio_lookup <- setNames(known_municipios, normalize_key(known_municipios))
+
+pick_existing_column <- function(df, candidates) {
+  cols <- names(df)
+  idx <- match(tolower(candidates), tolower(cols))
+  idx <- idx[!is.na(idx)]
+  if (length(idx) == 0) {
+    return(NULL)
+  }
+  cols[idx[1]]
+}
+
+title_case_safe <- function(x) {
+  x <- trimws(as.character(x))
+  x[tolower(x) %in% c("", "na", "n/a", "null")] <- "Não informado"
+  tools::toTitleCase(tolower(x))
+}
+
+standardize_gve <- function(gve_raw) {
+  gve_raw <- as.character(gve_raw)
+  key <- normalize_key(gve_raw)
+
+  result <- known_gve_lookup[key]
+  result <- as.character(result)
+
+  missing <- is.na(result) | result == ""
+  if (any(missing)) {
+    fallback <- trimws(gve_raw[missing])
+    fallback[fallback == "" | is.na(fallback)] <- "Não informado"
+    needs_prefix <- !grepl("^gve\\b", tolower(fallback))
+    fallback[needs_prefix] <- paste("GVE", fallback[needs_prefix])
+    result[missing] <- fallback
+  }
+
+  result
+}
+
+standardize_municipio <- function(municipio_raw) {
+  municipio_raw <- as.character(municipio_raw)
+  key <- normalize_key(municipio_raw)
+
+  result <- known_municipio_lookup[key]
+  result <- as.character(result)
+
+  missing <- is.na(result) | result == ""
+  if (any(missing)) {
+    result[missing] <- title_case_safe(municipio_raw[missing])
+  }
+
+  result
+}
+
+infer_population <- function(municipios) {
+  municipios <- as.character(municipios)
+  pop <- municipio_populacao[municipios]
+  pop <- as.numeric(pop)
+
+  missing <- is.na(pop) | pop <= 0
+  if (any(missing)) {
+    hash_base <- vapply(
+      municipios[missing],
+      function(x) sum(utf8ToInt(enc2utf8(x))),
+      numeric(1)
+    )
+    pop[missing] <- as.numeric(80000 + (hash_base %% 420000))
+  }
+
+  round(pop)
+}
+
+map_drs_from_gve <- function(gve, drs_raw = NULL) {
+  gve <- as.character(gve)
+  drs_from_gve <- unname(gve_drs_lookup[gve])
+
+  if (!is.null(drs_raw)) {
+    drs_raw <- as.character(drs_raw)
+    drs_raw <- trimws(drs_raw)
+    drs_raw[drs_raw == ""] <- NA_character_
+    drs_from_gve[is.na(drs_from_gve)] <- drs_raw[is.na(drs_from_gve)]
+  }
+
+  drs_from_gve[is.na(drs_from_gve)] <- "DRS Não informado"
+  drs_from_gve
+}
+
+parse_notification_date <- function(value) {
+  value <- as.character(value)
+  parsed <- suppressWarnings(
+    parse_date_time(
+      value,
+      orders = c(
+        "d/m/Y H:M:S", "d/m/Y H:M", "d/m/Y",
+        "d/m/y H:M:S", "d/m/y H:M", "d/m/y",
+        "Y-m-d H:M:S", "Y-m-d H:M", "Y-m-d",
+        "Y/m/d H:M:S", "Y/m/d H:M", "Y/m/d",
+        "d-m-Y H:M:S", "d-m-Y H:M", "d-m-Y",
+        "m/d/Y H:M:S", "m/d/Y H:M", "m/d/Y"
+      ),
+      quiet = TRUE
+    )
+  )
+
+  as.Date(parsed)
+}
+
+prepare_oftalmo_dataset <- function(raw_data) {
+  if (is.null(raw_data) || nrow(raw_data) == 0) {
+    return(NULL)
+  }
+
+  date_col <- pick_existing_column(raw_data, c("DtNotificacao", "dt_notificacao", "data_notificacao"))
+  municipio_col <- pick_existing_column(raw_data, c("MunicipioNotificacao", "municipio_notificacao", "municipio"))
+  gve_col <- pick_existing_column(raw_data, c("dominio_gve", "gve"))
+  drs_col <- pick_existing_column(raw_data, c("drs", "DRS"))
+  casos_col <- pick_existing_column(raw_data, c("TotalCaso", "total_caso", "casos"))
+  surto_col <- pick_existing_column(raw_data, c("NuSurto", "nu_surto"))
+  surto_flag_col <- pick_existing_column(raw_data, c("Surto", "surto"))
+
+  if (is.null(date_col) || is.null(municipio_col) || is.null(casos_col)) {
+    return(NULL)
+  }
+
+  df <- raw_data %>%
     mutate(
-      gve = case_when(
-        drs == "DRS Ribeirão Preto" ~ sample(drs_gve_mapping[["DRS Ribeirão Preto"]], n(), replace = TRUE),
-        drs == "DRS Campinas" ~ sample(drs_gve_mapping[["DRS Campinas"]], n(), replace = TRUE),
-        drs == "DRS São Paulo" ~ sample(drs_gve_mapping[["DRS São Paulo"]], n(), replace = TRUE),
-        drs == "DRS Bauru" ~ sample(drs_gve_mapping[["DRS Bauru"]], n(), replace = TRUE),
-        drs == "DRS Araçatuba" ~ sample(drs_gve_mapping[["DRS Araçatuba"]], n(), replace = TRUE),
-      ),
-      municipio = case_when(
-        gve == "GVE Ribeirão Preto" ~ sample(gve_municipio_mapping[["GVE Ribeirão Preto"]], n(), replace = TRUE),
-        gve == "GVE Araraquara" ~ sample(gve_municipio_mapping[["GVE Araraquara"]], n(), replace = TRUE),
-        gve == "GVE São Carlos" ~ sample(gve_municipio_mapping[["GVE São Carlos"]], n(), replace = TRUE),
-        gve == "GVE Campinas" ~ sample(gve_municipio_mapping[["GVE Campinas"]], n(), replace = TRUE),
-        gve == "GVE Piracicaba" ~ sample(gve_municipio_mapping[["GVE Piracicaba"]], n(), replace = TRUE),
-        gve == "GVE Sorocaba" ~ sample(gve_municipio_mapping[["GVE Sorocaba"]], n(), replace = TRUE),
-        gve == "GVE Santo Amaro" ~ sample(gve_municipio_mapping[["GVE Santo Amaro"]], n(), replace = TRUE),
-        gve == "GVE Vila Mariana" ~ sample(gve_municipio_mapping[["GVE Vila Mariana"]], n(), replace = TRUE),
-        gve == "GVE Pinheiros" ~ sample(gve_municipio_mapping[["GVE Pinheiros"]], n(), replace = TRUE),
-        gve == "GVE Bauru" ~ sample(gve_municipio_mapping[["GVE Bauru"]], n(), replace = TRUE),
-        gve == "GVE Avaré" ~ sample(gve_municipio_mapping[["GVE Avaré"]], n(), replace = TRUE),
-        gve == "GVE Jaú" ~ sample(gve_municipio_mapping[["GVE Jaú"]], n(), replace = TRUE),
-        gve == "GVE Araçatuba" ~ sample(gve_municipio_mapping[["GVE Araçatuba"]], n(), replace = TRUE),
-        gve == "GVE Birigui" ~ sample(gve_municipio_mapping[["GVE Birigui"]], n(), replace = TRUE),
-        gve == "GVE Andradina" ~ sample(gve_municipio_mapping[["GVE Andradina"]], n(), replace = TRUE),
-        TRUE ~ "Desconhecido"
-      ),
-      casos = case_when(
-        ano == 2024 ~ rpois(n(), lambda = 15 + semana * 0.5 + rnorm(n(), 0, 3)),
-        ano == 2023 ~ rpois(n(), lambda = 10 + rnorm(n(), 0, 2)),
-        TRUE ~ rpois(n(), lambda = 8 + rnorm(n(), 0, 1))
-      ),
-      casos = pmax(casos, 0),
-      populacao = case_when(
-        municipio == "São Paulo" ~ 11000000,
-        municipio == "Campinas" ~ 1200000,
-        municipio == "Ribeirão Preto" ~ 700000,
-        municipio == "Sorocaba" ~ 650000,
-        TRUE ~ sample(100000:500000, 1)
-      ),
-      incidencia = round((casos / populacao) * 100000, 2)
+      data_notificacao = parse_notification_date(.data[[date_col]]),
+      municipio = standardize_municipio(.data[[municipio_col]]),
+      gve = if (!is.null(gve_col)) standardize_gve(.data[[gve_col]]) else "GVE Não informado",
+      drs = if (!is.null(drs_col)) as.character(.data[[drs_col]]) else NA_character_,
+      drs = map_drs_from_gve(gve, drs),
+      casos = suppressWarnings(as.numeric(.data[[casos_col]])),
+      casos = ifelse(is.na(casos), 0, pmax(round(casos), 0)),
+      surto_n = if (!is.null(surto_col)) suppressWarnings(as.numeric(.data[[surto_col]])) else 0,
+      surto_n = ifelse(is.na(surto_n), 0, pmax(round(surto_n), 0)),
+      surto_flag = if (!is.null(surto_flag_col)) {
+        ifelse(tolower(as.character(.data[[surto_flag_col]])) %in% c("1", "true", "sim", "s"), 1, 0)
+      } else {
+        0
+      }
+    ) %>%
+    filter(!is.na(data_notificacao)) %>%
+    mutate(
+      ano = year(data_notificacao),
+      semana = isoweek(data_notificacao),
+      semana = pmin(pmax(semana, 1), 53),
+      populacao = infer_population(municipio),
+      surtos = surto_n + surto_flag
+    ) %>%
+    group_by(ano, semana, drs, gve, municipio, populacao) %>%
+    summarise(
+      casos = sum(casos, na.rm = TRUE),
+      surtos = sum(surtos, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    mutate(
+      incidencia = ifelse(populacao > 0, round((casos / populacao) * 100000, 2), NA_real_)
     ) %>%
     arrange(ano, semana, drs, gve, municipio)
 
-  return(data)
+  if (nrow(df) == 0) {
+    return(NULL)
+  }
+
+  df
 }
 
-dados_epidemiologicos <- generate_mock_data()
+generate_mock_data <- function() {
+  combinacoes <- lapply(names(drs_gve_mapping), function(drs_atual) {
+    gves <- drs_gve_mapping[[drs_atual]]
+
+    bind_rows(lapply(gves, function(gve_atual) {
+      tibble::tibble(
+        drs = drs_atual,
+        gve = gve_atual,
+        municipio = gve_municipio_mapping[[gve_atual]]
+      )
+    }))
+  }) %>%
+    bind_rows()
+
+  anos <- 2022:year(Sys.Date())
+  semanas <- 1:52
+
+  dados <- expand_grid(
+    ano = anos,
+    semana = semanas
+  ) %>%
+    crossing(combinacoes) %>%
+    mutate(
+      ciclo_sazonal = 6 * sin((2 * pi * semana) / 52) + 8 * exp(-((semana - 10)^2) / 70),
+      tendencia = (ano - min(anos)) * 1.1,
+      ruido = rnorm(n(), mean = 0, sd = 2.5),
+      lambda = pmax(1.5, 4 + ciclo_sazonal + tendencia + ruido),
+      casos = rpois(n(), lambda = lambda),
+      populacao = infer_population(municipio),
+      surtos = ifelse(casos > quantile(casos, 0.9, na.rm = TRUE), 1, 0),
+      incidencia = round((casos / populacao) * 100000, 2)
+    ) %>%
+    select(ano, semana, drs, gve, municipio, casos, populacao, incidencia, surtos) %>%
+    arrange(ano, semana, drs, gve, municipio)
+
+  dados
+}
+
+load_epidemiological_data <- function(prefer_db = TRUE) {
+  if (prefer_db && exists("load_oftalmo_raw_data", mode = "function")) {
+    db_data <- tryCatch(
+      {
+        raw <- load_oftalmo_raw_data()
+        prepare_oftalmo_dataset(raw)
+      },
+      error = function(e) NULL
+    )
+
+    if (!is.null(db_data) && nrow(db_data) > 0) {
+      attr(db_data, "data_source") <- "database"
+      return(db_data)
+    }
+  }
+
+  mock_data <- generate_mock_data()
+  attr(mock_data, "data_source") <- "mock"
+  mock_data
+}
+
+dados_epidemiologicos <- load_epidemiological_data(prefer_db = TRUE)
+dados_fonte <- attr(dados_epidemiologicos, "data_source")
 
 get_gve_by_drs <- function(drs) {
-  drs_gve_mapping[[drs]]
+  sort(unique(dados_epidemiologicos$gve[dados_epidemiologicos$drs == drs]))
 }
 
 get_municipios_by_gve <- function(gve) {
-  gve_municipio_mapping[[gve]]
+  sort(unique(dados_epidemiologicos$municipio[dados_epidemiologicos$gve == gve]))
 }
+
+get_municipio_coords <- function(municipios) {
+  coords_known <- data.frame(
+    municipio = c(
+      "Ribeirão Preto", "Araraquara", "São Carlos", "Campinas", "Piracicaba",
+      "Sorocaba", "São Paulo", "Santo André", "São Bernardo", "Bauru", "Jaú",
+      "Araçatuba", "Birigui", "Andradina", "Cravinhos", "Limeira", "Valinhos", "Vinhedo"
+    ),
+    lat = c(
+      -21.1775, -21.7947, -22.0174, -22.9056, -22.7253,
+      -23.5015, -23.5505, -23.6578, -23.6914, -22.3145, -22.2936,
+      -21.2069, -21.2885, -20.8960, -21.3408, -22.5645, -22.9698, -23.0296
+    ),
+    lng = c(
+      -47.8103, -48.1756, -47.8860, -47.0608, -47.6492,
+      -47.4526, -46.6333, -46.5333, -46.5655, -49.0587, -48.5592,
+      -50.4328, -50.3408, -51.3790, -47.7290, -47.4004, -46.9956, -46.9755
+    ),
+    stringsAsFactors = FALSE
+  )
+
+  base <- data.frame(municipio = unique(as.character(municipios)), stringsAsFactors = FALSE)
+  coords <- base %>% left_join(coords_known, by = "municipio")
+
+  missing <- is.na(coords$lat) | is.na(coords$lng)
+  if (any(missing)) {
+    hash <- vapply(
+      coords$municipio[missing],
+      function(x) sum(utf8ToInt(enc2utf8(x))),
+      numeric(1)
+    )
+
+    coords$lat[missing] <- -22.3 + ((hash %% 220) - 110) / 100
+    coords$lng[missing] <- -48.2 + (((hash * 7) %% 240) - 120) / 100
+  }
+
+  coords
+}
+
+get_sp_municipality_shapes <- local({
+  cached_shapes <- NULL
+
+  function() {
+    if (!is.null(cached_shapes)) {
+      return(cached_shapes)
+    }
+
+    if (!requireNamespace("geobr", quietly = TRUE) || !requireNamespace("sf", quietly = TRUE)) {
+      return(NULL)
+    }
+
+    cached_shapes <<- tryCatch(
+      {
+        shp <- geobr::read_municipality(
+          code_muni = "SP",
+          year = 2020,
+          simplified = TRUE,
+          showProgress = FALSE
+        )
+
+        shp %>%
+          mutate(municipio_norm = normalize_key(name_muni))
+      },
+      error = function(e) NULL
+    )
+
+    cached_shapes
+  }
+})
