@@ -4,6 +4,7 @@ Aplicativo Shiny para monitoramento semanal de conjuntivites com interface moder
 
 ## Destaques
 
+- Banner institucional obrigatorio no topo (`www/banner_governo_sp.svg`).
 - Layout clean, responsivo, tema claro e filtros horizontais no topo.
 - Cards com indicadores principais:
   - Total de casos

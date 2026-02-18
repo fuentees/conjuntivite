@@ -21,67 +21,87 @@ if (length(anos_disponiveis) == 0) {
   anos_disponiveis <- year(Sys.Date())
 }
 
-ui <- page_navbar(
-  theme = custom_theme,
-  title = div(
-    class = "d-flex align-items-center gap-2",
-    div(
-      style = "width: 38px; height: 38px; border-radius: 10px; background: linear-gradient(135deg, #005ca9, #1976d2); display:flex; align-items:center; justify-content:center;",
-      icon("eye", style = "color: white;")
-    ),
-    div(
-      div("Painel de Vigilância Epidemiológica", style = "font-weight: 700; line-height: 1.1;"),
-      small("Conjuntivites", class = "text-muted")
+ui <- tagList(
+  div(
+    class = "sp-gov-banner-wrapper",
+    tags$img(
+      src = "banner_governo_sp.svg",
+      class = "sp-gov-banner-img",
+      alt = "Banner institucional da Secretaria de Estado da Saúde de São Paulo"
     )
   ),
-  bg = "#ffffff",
-  inverse = FALSE,
-  underlines = TRUE,
-  collapsible = TRUE,
-  header = tags$head(
-    tags$style(
-      HTML(
-        "
-        .app-container {
-          background: #f4f6f8;
-          min-height: calc(100vh - 56px);
-          padding-bottom: 2rem;
-        }
-        .filter-card,
-        .custom-card,
-        .value-box {
-          border: 0;
-          border-radius: 16px !important;
-          box-shadow: 0 4px 18px rgba(32, 50, 68, 0.08);
-          transition: transform 0.2s ease, box-shadow 0.2s ease;
-        }
-        .filter-card:hover,
-        .custom-card:hover,
-        .value-box:hover {
-          transform: translateY(-1px);
-          box-shadow: 0 8px 24px rgba(32, 50, 68, 0.12);
-        }
-        .bslib-value-box .value-box-title {
-          font-size: 0.95rem;
-          font-weight: 600;
-        }
-        .bslib-value-box .value-box-value {
-          font-size: 1.35rem;
-          font-weight: 700;
-        }
-        .text-chip {
-          font-size: 0.8rem;
-          padding: 0.2rem 0.65rem;
-          border-radius: 999px;
-          background: #e8f1fb;
-          color: #005ca9;
-          font-weight: 600;
-        }
-        "
+  page_navbar(
+    theme = custom_theme,
+    title = div(
+      class = "d-flex align-items-center gap-2",
+      div(
+        style = "width: 38px; height: 38px; border-radius: 10px; background: linear-gradient(135deg, #005ca9, #1976d2); display:flex; align-items:center; justify-content:center;",
+        icon("eye", style = "color: white;")
+      ),
+      div(
+        div("Painel de Vigilância Epidemiológica", style = "font-weight: 700; line-height: 1.1;"),
+        small("Conjuntivites", class = "text-muted")
       )
-    )
-  ),
-  nav_panel(
+    ),
+    bg = "#ffffff",
+    inverse = FALSE,
+    underlines = TRUE,
+    collapsible = TRUE,
+    header = tags$head(
+      tags$style(
+        HTML(
+          "
+          .sp-gov-banner-wrapper {
+            width: 100%;
+            background: #00508f;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+          }
+          .sp-gov-banner-img {
+            width: 100%;
+            max-height: 92px;
+            object-fit: cover;
+            display: block;
+          }
+          .app-container {
+            background: #f4f6f8;
+            min-height: calc(100vh - 56px);
+            padding-bottom: 2rem;
+          }
+          .filter-card,
+          .custom-card,
+          .value-box {
+            border: 0;
+            border-radius: 16px !important;
+            box-shadow: 0 4px 18px rgba(32, 50, 68, 0.08);
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+          }
+          .filter-card:hover,
+          .custom-card:hover,
+          .value-box:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 8px 24px rgba(32, 50, 68, 0.12);
+          }
+          .bslib-value-box .value-box-title {
+            font-size: 0.95rem;
+            font-weight: 600;
+          }
+          .bslib-value-box .value-box-value {
+            font-size: 1.35rem;
+            font-weight: 700;
+          }
+          .text-chip {
+            font-size: 0.8rem;
+            padding: 0.2rem 0.65rem;
+            border-radius: 999px;
+            background: #e8f1fb;
+            color: #005ca9;
+            font-weight: 600;
+          }
+          "
+        )
+      )
+    ),
+    nav_panel(
     "Painel",
     div(
       class = "app-container",
@@ -204,8 +224,8 @@ ui <- page_navbar(
         )
       )
     )
-  ),
-  nav_panel(
+    ),
+    nav_panel(
     "Sobre",
     div(
       class = "container-fluid py-3",
@@ -230,9 +250,10 @@ ui <- page_navbar(
         )
       )
     )
-  ),
-  footer = div(
-    class = "text-center text-muted py-3 border-top small",
-    "Secretaria de Saúde - Vigilância Epidemiológica | Desenvolvido com Shiny"
+    ),
+    footer = div(
+      class = "text-center text-muted py-3 border-top small",
+      "Secretaria de Saúde - Vigilância Epidemiológica | Desenvolvido com Shiny"
+    )
   )
 )
