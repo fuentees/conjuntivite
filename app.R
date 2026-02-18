@@ -1,0 +1,15 @@
+library(shiny)
+library(shinyjs)
+library(bslib)
+library(dplyr)
+library(ggplot2)
+library(plotly)
+library(leaflet)
+library(lubridate)
+library(tidyr)
+
+source("R/data.R")
+source("R/ui.R")
+source("R/server.R")
+
+shinyApp(ui = ui, server = server)
