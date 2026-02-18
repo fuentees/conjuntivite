@@ -42,6 +42,9 @@ export OFTALMO_ALLOW_MOCK="true"
 - `TotalCaso` (casos)
 - `NuSurto` e/ou `Surto` (informações de surto)
 
+Também são reconhecidos automaticamente formatos comuns da sua base, como:
+`GVE_NOME`, `DRS_NOME`, `ANO`, `SemEpidemio`.
+
 Esses campos são transformados para a estrutura interna:
 
 `ano`, `semana`, `drs`, `gve`, `municipio`, `casos`, `populacao`, `incidencia`, `surtos`

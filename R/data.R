@@ -461,20 +461,20 @@ prepare_oftalmo_dataset <- function(raw_data) {
   date_col <- pick_column_with_override(
     raw_data,
     override_env_var = "OFTALMO_COL_DATA",
-    candidates = c("DtNotificacao", "dt_notificacao", "data_notificacao"),
+    candidates = c("DtNotificacao", "dt_notificacao", "data_notificacao", "created_at", "DtUpdate"),
     regex_candidates = c("^dt.*not", "^data.*not")
   )
   ano_col <- pick_column_with_override(
     raw_data,
     override_env_var = "OFTALMO_COL_ANO",
-    candidates = c("ano", "Ano", "AnoNotificacao", "ano_notificacao"),
+    candidates = c("ANO", "ano", "Ano", "AnoNotificacao", "ano_notificacao"),
     regex_candidates = c("^ano$", "ano.*not", "year")
   )
   semana_col <- pick_column_with_override(
     raw_data,
     override_env_var = "OFTALMO_COL_SEMANA",
-    candidates = c("semana", "Semana", "SE", "SemanaEpidemiologica", "semana_epidemiologica"),
-    regex_candidates = c("^semana$", "semana.*epi", "^se$")
+    candidates = c("SemEpidemio", "semepidemio", "semana", "Semana", "SE", "SemanaEpidemiologica", "semana_epidemiologica"),
+    regex_candidates = c("^semana$", "semana.*epi", "^se$", "semepid")
   )
   municipio_col <- pick_column_with_override(
     raw_data,
@@ -485,13 +485,13 @@ prepare_oftalmo_dataset <- function(raw_data) {
   gve_col <- pick_column_with_override(
     raw_data,
     override_env_var = "OFTALMO_COL_GVE",
-    candidates = c("dominio_gve", "gve"),
+    candidates = c("GVE_NOME", "gve_nome", "dominio_gve", "gve", "gve_numero"),
     regex_candidates = c("gve", "grupo.*vigil", "vigilancia.*epid")
   )
   drs_col <- pick_column_with_override(
     raw_data,
     override_env_var = "OFTALMO_COL_DRS",
-    candidates = c("dominio_drs", "drs", "DRS"),
+    candidates = c("DRS_NOME", "drs_nome", "dominio_drs", "drs", "DRS", "drs_numero"),
     regex_candidates = c("\\bdrs\\b", "diretoria.*regional", "regional.*saude")
   )
   casos_col <- pick_column_with_override(
