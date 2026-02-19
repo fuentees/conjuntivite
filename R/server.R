@@ -43,6 +43,42 @@ server <- function(input, output, session) {
 
   selected_year <- reactive({
     if (is.null(input$filtro_ano) || identical(input$filtro_ano, "Todos")) {
+      df_ref <- dados_epidemiologicos
+
+      if (!is.null(input$filtro_drs) && input$filtro_drs != "Todas") {
+        df_ref <- df_ref %>% filter(drs == input$filtro_drs)
+      }
+      if (!is.null(input$filtro_gve) && input$filtro_gve != "Todas") {
+        df_ref <- df_ref %>% filter(gve == input$filtro_gve)
+      }
+      if (!is.null(input$filtro_municipio) && input$filtro_municipio != "Todos") {
+        df_ref <- df_ref %>% filter(municipio == input$filtro_municipio)
+      }
+      if (
+        !is.null(input$filtro_uvis) &&
+          input$filtro_uvis != "Todas" &&
+          !is.null(input$filtro_municipio) &&
+          input$filtro_municipio != "Todos" &&
+          normalize_key(input$filtro_municipio) == "sao paulo"
+      ) {
+        df_ref <- df_ref %>% filter(uvis == input$filtro_uvis)
+      }
+
+      anos_validos <- df_ref %>%
+        group_by(ano) %>%
+        summarise(total_casos = sum(casos, na.rm = TRUE), .groups = "drop") %>%
+        arrange(desc(ano))
+
+      anos_com_caso <- anos_validos %>%
+        filter(total_casos > 0)
+
+      if (nrow(anos_com_caso) > 0) {
+        return(as.integer(anos_com_caso$ano[1]))
+      }
+      if (nrow(anos_validos) > 0) {
+        return(as.integer(anos_validos$ano[1]))
+      }
+
       if (length(anos_ordenados) > 0) {
         return(as.integer(anos_ordenados[1]))
       }
@@ -1021,40 +1057,7 @@ server <- function(input, output, session) {
       return(tibble::tibble(faixa = faixas, casos = valores_observados, origem = "observado"))
     }
 
-    # Fallback: se a base vier sem detalhamento etário no recorte atual,
-    # estima usando perfil histórico do mesmo recorte dimensional.
-    hist_df <- dados_filtrados_dimensoes()
-    valores_historicos <- c(
-      sum(hist_df$fx_menor1, na.rm = TRUE),
-      sum(hist_df$fx_1a4, na.rm = TRUE),
-      sum(hist_df$fx_5a9, na.rm = TRUE),
-      sum(hist_df$fx_10a14, na.rm = TRUE),
-      sum(hist_df$fx_15mais, na.rm = TRUE)
-    )
-
-    total_hist <- sum(valores_historicos, na.rm = TRUE)
-    if (!is.finite(total_hist) || total_hist <= 0) {
-      props <- c(0.07, 0.23, 0.24, 0.18, 0.28)
-      origem <- "estimado_padrao"
-    } else {
-      props <- valores_historicos / total_hist
-      origem <- "estimado_historico"
-    }
-
-    total_casos <- sum(df$casos, na.rm = TRUE)
-    if (!is.finite(total_casos) || total_casos <= 0) {
-      return(zero_tbl)
-    }
-
-    estimado <- round(total_casos * props)
-    delta <- as.integer(total_casos - sum(estimado, na.rm = TRUE))
-    estimado[length(estimado)] <- pmax(estimado[length(estimado)] + delta, 0)
-
-    tibble::tibble(
-      faixa = faixas,
-      casos = pmax(estimado, 0),
-      origem = origem
-    )
+    zero_tbl
   })
 
   output$grafico_faixa_etaria <- renderPlotly({
@@ -1067,9 +1070,7 @@ server <- function(input, output, session) {
     anotacao <- switch(
       origem,
       observado = "Faixas etárias observadas na base",
-      estimado_historico = "Faixas etárias estimadas pelo perfil histórico do recorte",
-      estimado_padrao = "Faixas etárias estimadas por perfil padrão",
-      "Faixas etárias sem dados"
+      "Faixas etárias sem dados observados no recorte atual"
     )
 
     plot_ly(
