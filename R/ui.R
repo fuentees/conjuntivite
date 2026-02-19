@@ -380,7 +380,7 @@ ui <- tagList(
         br(),
         card(
           class = "custom-card",
-          card_header("Tabela operacional por município (alerta rápido)"),
+          card_header("Tabela operacional por município (alerta por incidência das últimas 4 semanas)"),
           card_body(
             DT::DTOutput("tabela_municipios")
           ),

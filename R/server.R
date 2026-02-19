@@ -1223,43 +1223,67 @@ server <- function(input, output, session) {
           municipio = character(),
           ano = integer(),
           populacao = numeric(),
-          total = numeric(),
-          incidencia = numeric(),
+          total_ano = numeric(),
+          incidencia_anual = numeric(),
+          total_4s = numeric(),
+          incidencia_4s = numeric(),
           alerta = character(),
           alerta_flag = integer()
         )
       )
     }
 
-    resumo <- df %>%
+    semana_limite <- suppressWarnings(max(df$semana[df$casos > 0], na.rm = TRUE))
+    if (!is.finite(semana_limite)) {
+      semana_limite <- suppressWarnings(max(df$semana, na.rm = TRUE))
+    }
+    if (!is.finite(semana_limite)) {
+      semana_limite <- 53
+    }
+    semana_inicio <- max(1, as.integer(semana_limite) - 3)
+
+    resumo_ano <- df %>%
       group_by(gve, municipio, ano) %>%
       summarise(
         populacao = max(populacao, na.rm = TRUE),
-        total = sum(casos, na.rm = TRUE),
+        total_ano = sum(casos, na.rm = TRUE),
         surtos = sum(surtos, na.rm = TRUE),
         .groups = "drop"
-      ) %>%
+      )
+
+    resumo_4s <- df %>%
+      filter(semana >= semana_inicio, semana <= semana_limite) %>%
+      group_by(gve, municipio, ano) %>%
+      summarise(
+        total_4s = sum(casos, na.rm = TRUE),
+        .groups = "drop"
+      )
+
+    resumo <- resumo_ano %>%
+      left_join(resumo_4s, by = c("gve", "municipio", "ano")) %>%
       mutate(
+        total_4s = tidyr::replace_na(total_4s, 0),
         populacao = ifelse(is.infinite(populacao) | populacao <= 0, NA_real_, populacao),
-        incidencia = ifelse(populacao > 0, (total / populacao) * 100000, NA_real_)
+        incidencia_anual = ifelse(populacao > 0, (total_ano / populacao) * 100000, NA_real_),
+        incidencia_4s = ifelse(populacao > 0, (total_4s / populacao) * 100000, NA_real_)
       )
 
     limiar_alerta <- suppressWarnings(stats::quantile(
-      resumo$incidencia[is.finite(resumo$incidencia) & resumo$incidencia > 0],
+      resumo$incidencia_4s[is.finite(resumo$incidencia_4s) & resumo$incidencia_4s > 0],
       probs = 0.75,
       na.rm = TRUE
     ))
 
-    if (!is.finite(limiar_alerta)) {
-      limiar_alerta <- 0
+    if (!is.finite(limiar_alerta) || limiar_alerta <= 0) {
+      limiar_alerta <- Inf
     }
 
     resumo %>%
       mutate(
-        alerta_flag = ifelse(surtos > 0 | incidencia >= limiar_alerta, 1L, 0L),
+        alerta_flag = ifelse(surtos > 0 | (is.finite(incidencia_4s) & incidencia_4s >= limiar_alerta), 1L, 0L),
         alerta = ifelse(alerta_flag == 1L, "ALERTA", "ESTÁVEL")
       ) %>%
-      arrange(desc(alerta_flag), desc(incidencia), desc(total), municipio)
+      arrange(desc(alerta_flag), desc(incidencia_4s), desc(total_4s), municipio)
   })
 
   output$tabela_municipios <- DT::renderDT({
@@ -1271,8 +1295,10 @@ server <- function(input, output, session) {
         MUNICIPIO = toupper(municipio),
         ANO = as.integer(ano),
         POPULACAO = populacao,
-        TOTAL = total,
-        INCIDENCIA = round(incidencia, 2),
+        TOTAL_ANO = total_ano,
+        INCID_ANUAL = round(incidencia_anual, 2),
+        TOTAL_4S = total_4s,
+        INCID_4S = round(incidencia_4s, 2),
         ALERTA = alerta,
         alerta_flag = alerta_flag
       )
@@ -1285,15 +1311,15 @@ server <- function(input, output, session) {
         pageLength = 12,
         lengthMenu = c(12, 25, 50, 100),
         autoWidth = TRUE,
-        order = list(list(7, "desc"), list(5, "desc")),
+        order = list(list(9, "desc"), list(7, "desc"), list(6, "desc")),
         dom = "tip",
         columnDefs = list(
-          list(visible = FALSE, targets = 7)
+          list(visible = FALSE, targets = 9)
         )
       )
     ) %>%
       DT::formatCurrency(
-        columns = c("POPULACAO", "TOTAL"),
+        columns = c("POPULACAO", "TOTAL_ANO", "TOTAL_4S"),
         currency = "",
         interval = 3,
         mark = ".",
@@ -1301,7 +1327,7 @@ server <- function(input, output, session) {
         digits = 0
       ) %>%
       DT::formatCurrency(
-        columns = c("INCIDENCIA"),
+        columns = c("INCID_ANUAL", "INCID_4S"),
         currency = "",
         interval = 3,
         mark = ".",
@@ -1309,7 +1335,7 @@ server <- function(input, output, session) {
         digits = 2
       ) %>%
       DT::formatStyle(
-        "INCIDENCIA",
+        "INCID_4S",
         valueColumns = "alerta_flag",
         backgroundColor = DT::styleEqual(c(1, 0), c("#f8d7da", "#d4edda")),
         color = DT::styleEqual(c(1, 0), c("#7f1d1d", "#14532d")),

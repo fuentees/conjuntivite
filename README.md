@@ -27,9 +27,10 @@ Aplicativo Shiny para monitoramento semanal de conjuntivites com interface moder
   - Prioriza shapefile local por nível
   - Fallback automático para geobr (município) ou marcadores (sem shape)
 - Tabela interativa de municípios:
-  - GVE, município, ano, população, total e incidência
+  - GVE, município, ano, população, total anual e total das últimas 4 semanas
+  - Incidência acumulada anual + incidência das últimas 4 semanas
   - Formatação numérica brasileira (milhares com `.`)
-  - Alerta visual em verde/vermelho
+  - Alerta visual em verde/vermelho baseado na incidência de 4 semanas
   - Sincronização com o mapa por incidência
 
 ## Fonte de dados
