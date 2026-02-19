@@ -257,7 +257,7 @@ ui <- tagList(
           value_box(
             title = "Número de surtos",
             value = textOutput("num_surtos"),
-            subtitle = "Semanas acima do limite",
+            subtitle = textOutput("num_surtos_subtitulo"),
             showcase = icon("triangle-exclamation"),
             theme = "warning",
             class = "h-100"

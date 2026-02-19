@@ -473,9 +473,26 @@ server <- function(input, output, session) {
   })
 
   output$num_surtos <- renderText({
-    canal_df <- canal_endemico() %>% filter(is.finite(casos))
-    surtos <- sum(canal_df$casos > canal_df$limite_superior, na.rm = TRUE)
-    as.character(surtos)
+    df <- if (identical(input$filtro_ano, "Todos")) {
+      dados_filtrados_dimensoes()
+    } else {
+      dados_ano_referencia()
+    }
+
+    surtos_notificados <- sum(df$surtos, na.rm = TRUE)
+    if (!is.finite(surtos_notificados)) {
+      surtos_notificados <- 0
+    }
+
+    format(as.integer(round(surtos_notificados)), big.mark = ".", decimal.mark = ",")
+  })
+
+  output$num_surtos_subtitulo <- renderText({
+    if (identical(input$filtro_ano, "Todos")) {
+      "Surtos notificados (todos os anos)"
+    } else {
+      paste0("Surtos notificados em ", selected_year())
+    }
   })
 
   output$situacao_epidemiologica <- renderText({
