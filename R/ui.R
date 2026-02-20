@@ -325,6 +325,49 @@ ui <- tagList(
         ),
         br(),
         layout_columns(
+          col_widths = c(3, 3, 3, 3),
+          value_box(
+            title = "Backtest IA — acurácia",
+            value = textOutput("ia_bt_acuracia"),
+            showcase = icon("bullseye"),
+            theme = "info",
+            class = "h-100"
+          ),
+          value_box(
+            title = "Backtest IA — precisão",
+            value = textOutput("ia_bt_precisao"),
+            showcase = icon("crosshairs"),
+            theme = "primary",
+            class = "h-100"
+          ),
+          value_box(
+            title = "Backtest IA — sensibilidade",
+            value = textOutput("ia_bt_sensibilidade"),
+            showcase = icon("search"),
+            theme = "warning",
+            class = "h-100"
+          ),
+          value_box(
+            title = "Backtest IA — F1",
+            value = textOutput("ia_bt_f1"),
+            showcase = icon("chart-line"),
+            theme = "success",
+            class = "h-100"
+          )
+        ),
+        div(
+          class = "d-flex justify-content-end mt-1",
+          span(textOutput("ia_bt_amostra", inline = TRUE), class = "text-chip")
+        ),
+        br(),
+        card(
+          class = "custom-card",
+          card_header("Validação histórica da IA (backtest)"),
+          plotlyOutput("grafico_validacao_ia", height = "320px"),
+          full_screen = TRUE
+        ),
+        br(),
+        layout_columns(
           col_widths = c(12),
           card(
             class = "custom-card",

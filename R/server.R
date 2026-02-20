@@ -759,6 +759,204 @@ server <- function(input, output, session) {
     )
   }
 
+  calc_auc <- function(prob, y_true) {
+    prob <- as.numeric(prob)
+    y_true <- as.integer(y_true)
+    valid <- is.finite(prob) & !is.na(y_true)
+    prob <- prob[valid]
+    y_true <- y_true[valid]
+
+    if (length(y_true) == 0 || length(unique(y_true)) < 2) {
+      return(NA_real_)
+    }
+
+    n_pos <- sum(y_true == 1)
+    n_neg <- sum(y_true == 0)
+    if (n_pos == 0 || n_neg == 0) {
+      return(NA_real_)
+    }
+
+    ranks <- rank(prob, ties.method = "average")
+    (sum(ranks[y_true == 1]) - (n_pos * (n_pos + 1) / 2)) / (n_pos * n_neg)
+  }
+
+  calc_class_metrics <- function(pred, obs, prob = NULL) {
+    pred <- as.integer(pred)
+    obs <- as.integer(obs)
+    valid <- !is.na(pred) & !is.na(obs)
+
+    pred <- pred[valid]
+    obs <- obs[valid]
+
+    n <- length(obs)
+    if (n == 0) {
+      return(list(
+        n = 0, tp = 0, fp = 0, tn = 0, fn = 0,
+        acuracia = NA_real_, precisao = NA_real_, sensibilidade = NA_real_,
+        especificidade = NA_real_, f1 = NA_real_, auc = NA_real_,
+        taxa_obs = NA_real_, taxa_prev = NA_real_
+      ))
+    }
+
+    tp <- sum(pred == 1 & obs == 1)
+    fp <- sum(pred == 1 & obs == 0)
+    tn <- sum(pred == 0 & obs == 0)
+    fn <- sum(pred == 0 & obs == 1)
+
+    acuracia <- (tp + tn) / n
+    precisao <- if ((tp + fp) > 0) tp / (tp + fp) else NA_real_
+    sensibilidade <- if ((tp + fn) > 0) tp / (tp + fn) else NA_real_
+    especificidade <- if ((tn + fp) > 0) tn / (tn + fp) else NA_real_
+    f1 <- if ((2 * tp + fp + fn) > 0) (2 * tp) / (2 * tp + fp + fn) else NA_real_
+    auc <- if (!is.null(prob)) calc_auc(prob[valid], obs) else NA_real_
+
+    list(
+      n = n, tp = tp, fp = fp, tn = tn, fn = fn,
+      acuracia = acuracia, precisao = precisao, sensibilidade = sensibilidade,
+      especificidade = especificidade, f1 = f1, auc = auc,
+      taxa_obs = mean(obs == 1), taxa_prev = mean(pred == 1)
+    )
+  }
+
+  backtest_ia <- reactive({
+    df_bt <- dados_filtrados_dimensoes() %>%
+      filter(ano != 2011) %>%
+      group_by(ano, semana) %>%
+      summarise(
+        casos = sum(casos, na.rm = TRUE),
+        surtos = sum(surtos, na.rm = TRUE),
+        .groups = "drop"
+      )
+
+    if (nrow(df_bt) == 0) {
+      return(
+        list(
+          predictions = tibble::tibble(),
+          metrics_global = calc_class_metrics(integer(), integer()),
+          metrics_year = tibble::tibble()
+        )
+      )
+    }
+
+    anos <- sort(unique(df_bt$ano))
+    anos_candidatos <- anos
+    if (length(anos) >= 3) {
+      anos_candidatos <- anos[anos < max(anos)]
+    }
+    anos_candidatos <- anos_candidatos[anos_candidatos > min(anos)]
+
+    if (length(anos_candidatos) == 0) {
+      return(
+        list(
+          predictions = tibble::tibble(),
+          metrics_global = calc_class_metrics(integer(), integer()),
+          metrics_year = tibble::tibble()
+        )
+      )
+    }
+
+    pred_list <- lapply(anos_candidatos, function(ano_ref) {
+      hist <- df_bt %>% filter(ano < ano_ref)
+      if (nrow(hist) == 0) {
+        return(NULL)
+      }
+
+      stats_hist <- hist %>%
+        group_by(semana) %>%
+        summarise(
+          media_hist = mean(casos, na.rm = TRUE),
+          dp_hist = stats::sd(casos, na.rm = TRUE),
+          .groups = "drop"
+        ) %>%
+        mutate(
+          dp_hist = tidyr::replace_na(dp_hist, 0),
+          ucl_hist = media_hist + 1.96 * dp_hist
+        )
+
+      serie_ref <- tibble::tibble(semana = 1:53) %>%
+        left_join(
+          df_bt %>% filter(ano == ano_ref) %>% select(semana, casos, surtos),
+          by = "semana"
+        ) %>%
+        mutate(
+          casos = tidyr::replace_na(casos, 0),
+          surtos = tidyr::replace_na(surtos, 0)
+        )
+
+      semana_limite <- suppressWarnings(max(serie_ref$semana[(serie_ref$casos > 0) | (serie_ref$surtos > 0)], na.rm = TRUE))
+      if (!is.finite(semana_limite)) {
+        semana_limite <- suppressWarnings(max(serie_ref$semana, na.rm = TRUE))
+      }
+      if (!is.finite(semana_limite)) {
+        return(NULL)
+      }
+
+      serie_ref <- serie_ref %>%
+        filter(semana <= semana_limite) %>%
+        left_join(stats_hist, by = "semana") %>%
+        mutate(
+          media_hist = tidyr::replace_na(media_hist, 0),
+          dp_hist = tidyr::replace_na(dp_hist, 0),
+          ucl_hist = tidyr::replace_na(ucl_hist, media_hist),
+          zscore = ifelse(dp_hist > 0, (casos - media_hist) / dp_hist, 0),
+          media_movel4 = roll_mean(casos, k = 4),
+          media_movel4_prev = dplyr::lag(media_movel4, n = 4, default = dplyr::first(media_movel4)),
+          crescimento = ifelse(media_movel4_prev > 0, (media_movel4 - media_movel4_prev) / media_movel4_prev, 0),
+          crescimento = tidyr::replace_na(crescimento, 0),
+          z_norm = pmin(pmax(zscore / 3, -2), 2),
+          cresc_norm = pmin(pmax(crescimento, -1), 2),
+          score_ia = 1.1 * z_norm + 0.8 * cresc_norm,
+          prob_surto = stats::plogis(score_ia),
+          alerta_previsto = prob_surto >= 0.70,
+          observado = ifelse((surtos > 0) | (casos > ucl_hist), 1L, 0L),
+          ano = ano_ref
+        ) %>%
+        select(ano, semana, casos, surtos, prob_surto, alerta_previsto, observado)
+
+      serie_ref
+    })
+
+    pred_all <- dplyr::bind_rows(pred_list)
+
+    if (nrow(pred_all) == 0) {
+      return(
+        list(
+          predictions = tibble::tibble(),
+          metrics_global = calc_class_metrics(integer(), integer()),
+          metrics_year = tibble::tibble()
+        )
+      )
+    }
+
+    metrics_global <- calc_class_metrics(
+      pred = pred_all$alerta_previsto,
+      obs = pred_all$observado,
+      prob = pred_all$prob_surto
+    )
+
+    metrics_year <- dplyr::bind_rows(lapply(sort(unique(pred_all$ano)), function(ano_i) {
+      df_i <- pred_all %>% filter(ano == ano_i)
+      m <- calc_class_metrics(df_i$alerta_previsto, df_i$observado, df_i$prob_surto)
+      tibble::tibble(
+        ano = ano_i,
+        semanas = m$n,
+        taxa_obs = m$taxa_obs,
+        taxa_prev = m$taxa_prev,
+        acuracia = m$acuracia,
+        precisao = m$precisao,
+        sensibilidade = m$sensibilidade,
+        f1 = m$f1,
+        auc = m$auc
+      )
+    }))
+
+    list(
+      predictions = pred_all,
+      metrics_global = metrics_global,
+      metrics_year = metrics_year
+    )
+  })
+
   motor_alerta_ia <- reactive({
     ano_ref <- selected_year()
     serie_atual <- serie_semanal_atual() %>% arrange(semana)
@@ -900,6 +1098,88 @@ server <- function(input, output, session) {
 
   output$resumo_tendencia_curta <- renderText({
     ia_resumo_atual()$mensagem
+  })
+
+  format_metric_pct <- function(x, digits = 1) {
+    if (!is.finite(x)) {
+      return("N/A")
+    }
+    paste0(format(round(x * 100, digits), decimal.mark = ","), "%")
+  }
+
+  output$ia_bt_acuracia <- renderText({
+    format_metric_pct(backtest_ia()$metrics_global$acuracia)
+  })
+
+  output$ia_bt_precisao <- renderText({
+    format_metric_pct(backtest_ia()$metrics_global$precisao)
+  })
+
+  output$ia_bt_sensibilidade <- renderText({
+    format_metric_pct(backtest_ia()$metrics_global$sensibilidade)
+  })
+
+  output$ia_bt_f1 <- renderText({
+    format_metric_pct(backtest_ia()$metrics_global$f1)
+  })
+
+  output$ia_bt_amostra <- renderText({
+    bt <- backtest_ia()
+    n_sem <- bt$metrics_global$n
+    n_anos <- if (nrow(bt$metrics_year) > 0) n_distinct(bt$metrics_year$ano) else 0
+    paste0("Backtest: ", n_sem, " semanas avaliadas em ", n_anos, " anos")
+  })
+
+  output$grafico_validacao_ia <- renderPlotly({
+    bt <- backtest_ia()
+    df_year <- bt$metrics_year
+
+    if (nrow(df_year) == 0) {
+      return(empty_plotly("Sem histórico suficiente para validar a IA"))
+    }
+
+    plot_ly() %>%
+      add_bars(
+        data = df_year,
+        x = ~ano,
+        y = ~taxa_obs,
+        name = "Taxa observada de surto",
+        marker = list(color = "rgba(211,47,47,0.45)")
+      ) %>%
+      add_trace(
+        data = df_year,
+        x = ~ano,
+        y = ~taxa_prev,
+        type = "scatter",
+        mode = "lines+markers",
+        name = "Taxa prevista de alerta",
+        line = list(color = "#6a1b9a", width = 2.2)
+      ) %>%
+      add_trace(
+        data = df_year,
+        x = ~ano,
+        y = ~f1,
+        type = "scatter",
+        mode = "lines+markers",
+        name = "F1 por ano",
+        line = list(color = "#2e7d32", width = 2, dash = "dot")
+      ) %>%
+      layout(
+        barmode = "group",
+        hovermode = "x unified",
+        legend = list(orientation = "h", x = 0, y = 1.10),
+        margin = list(l = 55, r = 20, t = 10, b = 45),
+        plot_bgcolor = "rgba(245,245,245,0.5)",
+        paper_bgcolor = "white",
+        xaxis = list(title = "Ano avaliado", showgrid = FALSE),
+        yaxis = list(
+          title = "Proporção",
+          tickformat = ".0%",
+          range = c(0, 1),
+          showgrid = TRUE,
+          gridcolor = "#e5e7eb"
+        )
+      )
   })
 
   output$grafico_tendencia <- renderPlotly({
