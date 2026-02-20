@@ -296,44 +296,6 @@ ui <- tagList(
           col_widths = c(6, 6),
           card(
             class = "custom-card",
-            card_header("Modelo de tendência semanal (projeção curta)"),
-            plotlyOutput("grafico_tendencia", height = "350px"),
-            full_screen = TRUE
-          ),
-          card(
-            class = "custom-card",
-            card_header("Motor de alerta preditivo de surtos (IA)"),
-            plotlyOutput("grafico_alerta_ia", height = "350px"),
-            full_screen = TRUE
-          )
-        ),
-        br(),
-        layout_columns(
-          col_widths = c(4, 4, 4),
-          card(
-            class = "custom-card",
-            card_header("Distribuição por sexo"),
-            plotlyOutput("grafico_sexo", height = "320px"),
-            full_screen = TRUE
-          ),
-          card(
-            class = "custom-card",
-            card_header("Distribuição por faixa etária"),
-            plotlyOutput("grafico_faixa_etaria", height = "320px"),
-            full_screen = TRUE
-          ),
-          card(
-            class = "custom-card",
-            card_header("Ações e treinamentos realizados"),
-            plotlyOutput("grafico_acoes_treinamentos", height = "320px"),
-            full_screen = TRUE
-          )
-        ),
-        br(),
-        layout_columns(
-          col_widths = c(6, 6),
-          card(
-            class = "custom-card",
             card_header("Série temporal — casos por semana epidemiológica (barras)"),
             plotlyOutput("grafico_serie_temporal", height = "360px"),
             full_screen = TRUE
@@ -342,6 +304,22 @@ ui <- tagList(
             class = "custom-card",
             card_header("Canal endêmico"),
             plotlyOutput("grafico_canal_endemico", height = "360px"),
+            full_screen = TRUE
+          )
+        ),
+        br(),
+        layout_columns(
+          col_widths = c(6, 6),
+          card(
+            class = "custom-card",
+            card_header("Modelo de tendência semanal (projeção curta)"),
+            plotlyOutput("grafico_tendencia", height = "350px"),
+            full_screen = TRUE
+          ),
+          card(
+            class = "custom-card",
+            card_header("Motor de alerta preditivo de surtos (IA)"),
+            plotlyOutput("grafico_alerta_ia", height = "350px"),
             full_screen = TRUE
           )
         ),
@@ -385,6 +363,28 @@ ui <- tagList(
               ),
               leafletOutput("mapa", height = "470px")
             ),
+            full_screen = TRUE
+          )
+        ),
+        br(),
+        layout_columns(
+          col_widths = c(4, 4, 4),
+          card(
+            class = "custom-card",
+            card_header("Distribuição por sexo"),
+            plotlyOutput("grafico_sexo", height = "320px"),
+            full_screen = TRUE
+          ),
+          card(
+            class = "custom-card",
+            card_header("Distribuição por faixa etária"),
+            plotlyOutput("grafico_faixa_etaria", height = "320px"),
+            full_screen = TRUE
+          ),
+          card(
+            class = "custom-card",
+            card_header("Ações e treinamentos realizados"),
+            plotlyOutput("grafico_acoes_treinamentos", height = "320px"),
             full_screen = TRUE
           )
         )
