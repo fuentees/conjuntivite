@@ -170,6 +170,11 @@ ui <- tagList(
             color: #005ca9;
             font-weight: 600;
           }
+          .legend-note {
+            font-size: 0.82rem;
+            color: #52606d;
+            line-height: 1.35;
+          }
           #tabela_municipios table.dataTable tbody td,
           #tabela_municipios table.dataTable thead th {
             white-space: nowrap;
@@ -291,6 +296,10 @@ ui <- tagList(
             class = "h-100"
           )
         ),
+        div(
+          class = "legend-note px-1",
+          HTML("<strong>Legenda IA:</strong> BAIXO &lt; 50% | MODERADO 50-69% | ALTO 70-84% | CRÍTICO &ge; 85% de probabilidade de surto.")
+        ),
         br(),
         layout_columns(
           col_widths = c(6, 6),
@@ -363,7 +372,13 @@ ui <- tagList(
         card(
           class = "custom-card",
           card_header("Validação histórica da IA (backtest)"),
-          plotlyOutput("grafico_validacao_ia", height = "320px"),
+          card_body(
+            plotlyOutput("grafico_validacao_ia", height = "320px"),
+            tags$small(
+              class = "legend-note d-block mt-2",
+              "Legenda backtest: acurácia = acerto geral; precisão = acerto quando IA alerta; sensibilidade = capacidade de captar surtos; F1 = equilíbrio entre precisão e sensibilidade."
+            )
+          ),
           full_screen = TRUE
         ),
         br(),
@@ -383,7 +398,11 @@ ui <- tagList(
             class = "custom-card",
             card_header("Tabela operacional por município (alerta por incidência das últimas 4 semanas)"),
             card_body(
-              DT::DTOutput("tabela_municipios")
+              DT::DTOutput("tabela_municipios"),
+              tags$small(
+                class = "legend-note d-block mt-2",
+                HTML("<strong>Legenda tabela:</strong> vermelho = alerta (surto notificado ou incidência 4 semanas elevada); verde = estável. INCID_4S orienta ação rápida; INCID_ANUAL mostra acumulado.")
+              )
             ),
             full_screen = TRUE
           ),
@@ -404,7 +423,11 @@ ui <- tagList(
                   span(textOutput("fonte_geografica", inline = TRUE), class = "text-chip")
                 )
               ),
-              leafletOutput("mapa", height = "470px")
+              leafletOutput("mapa", height = "470px"),
+              tags$small(
+                class = "legend-note d-block mt-2",
+                "Legenda mapa: tons mais escuros indicam maior incidência. Clique no município para aplicar filtro automático."
+              )
             ),
             full_screen = TRUE
           )

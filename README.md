@@ -36,6 +36,10 @@ Aplicativo Shiny para monitoramento semanal de conjuntivites com interface moder
 - Bloco de validação de IA:
   - Acurácia, precisão, sensibilidade e F1 em backtest histórico
   - Comparação anual entre taxa observada de surtos e taxa prevista de alertas
+- Legendas operacionais no painel:
+  - Faixas de risco da IA
+  - Interpretação das métricas de backtest
+  - Regras de cor na tabela e leitura rápida do mapa
 
 ## Fonte de dados
 
