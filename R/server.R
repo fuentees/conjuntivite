@@ -1367,6 +1367,33 @@ server <- function(input, output, session) {
     )
   }
 
+  first_non_empty <- function(x) {
+    x <- as.character(x)
+    x <- trimws(x)
+    x <- x[!is.na(x) & x != "" & tolower(x) != "na"]
+    if (length(x) == 0) {
+      return(NA_character_)
+    }
+    x[1]
+  }
+
+  extract_numeric_geo_key <- function(values, level = c("gve", "drs")) {
+    level <- match.arg(level)
+    values_norm <- normalize_key(values)
+    has_num <- grepl("\\d+", values_norm)
+
+    nums <- ifelse(
+      has_num,
+      suppressWarnings(as.integer(sub(".*?(\\d+).*", "\\1", values_norm))),
+      NA_integer_
+    )
+
+    out <- rep(NA_character_, length(values_norm))
+    valid <- !is.na(nums)
+    out[valid] <- paste(level, nums[valid])
+    out
+  }
+
   nivel_mapa_atual <- reactive({
     nivel <- input$nivel_mapa
     if (is.null(nivel) || !(nivel %in% c("municipio", "gve", "drs"))) {
@@ -1555,6 +1582,7 @@ server <- function(input, output, session) {
         tibble::tibble(
           rotulo = character(),
           map_key = character(),
+          map_key_alt = character(),
           casos = numeric(),
           surtos = numeric(),
           populacao = numeric(),
@@ -1573,9 +1601,10 @@ server <- function(input, output, session) {
         resumo_municipios() %>%
           mutate(
             rotulo = municipio,
-            map_key = normalize_shape_key(rotulo, level = "municipio")
+            map_key = normalize_shape_key(rotulo, level = "municipio"),
+            map_key_alt = normalize_key(rotulo)
           ) %>%
-          select(rotulo, map_key, casos, surtos, populacao, incidencia, status_surto, faixa_incidencia)
+          select(rotulo, map_key, map_key_alt, casos, surtos, populacao, incidencia, status_surto, faixa_incidencia)
       )
     }
 
@@ -1585,6 +1614,7 @@ server <- function(input, output, session) {
         summarise(
           casos = sum(casos, na.rm = TRUE),
           surtos = sum(surtos, na.rm = TRUE),
+          gve_codigo = first_non_empty(gve_codigo),
           .groups = "drop"
         )
 
@@ -1601,9 +1631,13 @@ server <- function(input, output, session) {
             status_surto = ifelse(surtos > 0, "Em surto", "Sem surto"),
             faixa_incidencia = classificar_faixa_incidencia(incidencia),
             rotulo = gve,
-            map_key = normalize_shape_key(rotulo, level = "gve")
+            map_key_nome = normalize_shape_key(rotulo, level = "gve"),
+            map_key_codigo = normalize_shape_key(gve_codigo, level = "gve"),
+            map_key_num = extract_numeric_geo_key(rotulo, level = "gve"),
+            map_key = dplyr::coalesce(map_key_codigo, map_key_num, map_key_nome),
+            map_key_alt = dplyr::coalesce(map_key_nome, map_key_num, map_key_codigo)
           ) %>%
-          select(rotulo, map_key, casos, surtos, populacao, incidencia, status_surto, faixa_incidencia)
+          select(rotulo, map_key, map_key_alt, casos, surtos, populacao, incidencia, status_surto, faixa_incidencia)
       )
     }
 
@@ -1612,6 +1646,7 @@ server <- function(input, output, session) {
       summarise(
         casos = sum(casos, na.rm = TRUE),
         surtos = sum(surtos, na.rm = TRUE),
+        drs_codigo = first_non_empty(drs_codigo),
         .groups = "drop"
       )
 
@@ -1627,9 +1662,13 @@ server <- function(input, output, session) {
         status_surto = ifelse(surtos > 0, "Em surto", "Sem surto"),
         faixa_incidencia = classificar_faixa_incidencia(incidencia),
         rotulo = drs,
-        map_key = normalize_shape_key(rotulo, level = "drs")
+        map_key_nome = normalize_shape_key(rotulo, level = "drs"),
+        map_key_codigo = normalize_shape_key(drs_codigo, level = "drs"),
+        map_key_num = extract_numeric_geo_key(rotulo, level = "drs"),
+        map_key = dplyr::coalesce(map_key_codigo, map_key_num, map_key_nome),
+        map_key_alt = dplyr::coalesce(map_key_nome, map_key_num, map_key_codigo)
       ) %>%
-      select(rotulo, map_key, casos, surtos, populacao, incidencia, status_surto, faixa_incidencia)
+      select(rotulo, map_key, map_key_alt, casos, surtos, populacao, incidencia, status_surto, faixa_incidencia)
   })
 
   pontos_base_mapa <- reactive({
@@ -1713,10 +1752,10 @@ server <- function(input, output, session) {
     }
 
     pal <- colorFactor(
-      palette = c("#f2f4f6", "#deebf7", "#9ecae1", "#6baed6", "#3182bd", "#08519c"),
+      palette = c("#dbeafe", "#bfdbfe", "#93c5fd", "#60a5fa", "#2563eb", "#1e3a8a"),
       levels = incidencia_faixas,
       ordered = TRUE,
-      na.color = "#f2f4f6"
+      na.color = "#e5e7eb"
     )
 
     local_shape <- get_local_shape_layer(nivel)
@@ -1746,74 +1785,142 @@ server <- function(input, output, session) {
     }
 
     if (!is.null(local_shape) && nrow(local_shape) > 0) {
-      shp_join <- local_shape %>%
-        left_join(df_mapa, by = "map_key")
-
-      shp_join$label_exibicao <- ifelse(
-        is.na(shp_join$rotulo) | shp_join$rotulo == "",
-        as.character(shp_join$map_label),
-        shp_join$rotulo
-      )
-      shp_join$label_exibicao <- sanitize_map_label(shp_join$label_exibicao)
-
-      shp_join$surto_exibicao <- ifelse(
-        is.na(shp_join$status_surto) | shp_join$status_surto == "",
-        "Sem dados",
-        as.character(shp_join$status_surto)
-      )
-
-      shp_join$faixa_exibicao <- ifelse(
-        is.na(shp_join$faixa_incidencia) | shp_join$faixa_incidencia == "",
-        "Sem dados",
-        as.character(shp_join$faixa_incidencia)
-      )
-
-      shp_join$layer_id <- ifelse(
-        !is.na(shp_join$rotulo) & shp_join$rotulo != "",
-        normalize_key(shp_join$rotulo),
-        as.character(shp_join$map_key)
-      )
-      shp_join$layer_id[is.na(shp_join$layer_id) | shp_join$layer_id == ""] <- paste0("shape_", seq_len(nrow(shp_join)))
-
-      shp_join$tooltip <- ifelse(
-        is.na(shp_join$casos),
-        paste0("<strong>", shp_join$label_exibicao, "</strong><br>Sem notificações para os filtros"),
-        paste0(
-          "<strong>", shp_join$label_exibicao, "</strong><br>",
-          "Casos: ", format(round(shp_join$casos), big.mark = ".", decimal.mark = ","), "<br>",
-          "Incidência: ", format(round(shp_join$incidencia, 2), decimal.mark = ","), "/100 mil<br>",
-          "Faixa de incidência: ", shp_join$faixa_exibicao, "<br>",
-          "Situação de surto: ", shp_join$surto_exibicao
-        )
-      )
-
-      titulo_legenda <- ifelse(
-        shape_source == "local",
-        "Faixa de incidência (/100 mil)",
-        "Faixa de incidência (/100 mil) - fallback"
-      )
-
-      return(
-        leaflet(shp_join) %>%
-          addProviderTiles("CartoDB.Positron") %>%
-          addPolygons(
-            fillColor = ~pal(faixa_incidencia),
-            color = "#d1d5db",
-            weight = 1,
-            fillOpacity = 0.8,
-            smoothFactor = 0.2,
-            layerId = ~layer_id,
-            popup = ~htmltools::HTML(tooltip),
-            highlightOptions = highlightOptions(weight = 2, color = "#005ca9", bringToFront = TRUE)
-          ) %>%
-          addLegend(
-            colors = unname(pal(incidencia_faixas)),
-            labels = incidencia_faixas,
-            title = titulo_legenda,
-            position = "bottomright",
-            opacity = 0.9
+      lookup_parts <- list(
+        df_mapa %>%
+          transmute(
+            join_key = as.character(map_key),
+            rotulo_dado = rotulo,
+            casos, surtos, populacao, incidencia, status_surto, faixa_incidencia
+          ),
+        df_mapa %>%
+          transmute(
+            join_key = as.character(map_key_alt),
+            rotulo_dado = rotulo,
+            casos, surtos, populacao, incidencia, status_surto, faixa_incidencia
+          ),
+        df_mapa %>%
+          transmute(
+            join_key = normalize_shape_key(rotulo, level = nivel),
+            rotulo_dado = rotulo,
+            casos, surtos, populacao, incidencia, status_surto, faixa_incidencia
           )
       )
+
+      if (nivel %in% c("gve", "drs")) {
+        lookup_parts <- c(
+          lookup_parts,
+          list(
+            df_mapa %>%
+              transmute(
+                join_key = extract_numeric_geo_key(rotulo, level = nivel),
+                rotulo_dado = rotulo,
+                casos, surtos, populacao, incidencia, status_surto, faixa_incidencia
+              )
+          )
+        )
+      }
+
+      mapa_lookup <- bind_rows(lookup_parts) %>%
+        mutate(join_key = trimws(as.character(join_key))) %>%
+        filter(!is.na(join_key), join_key != "") %>%
+        arrange(desc(casos), desc(incidencia)) %>%
+        distinct(join_key, .keep_all = TRUE)
+
+      shp_join <- local_shape
+      shape_key_1 <- as.character(shp_join$map_key)
+      shape_key_2 <- if ("map_key_alt" %in% names(shp_join)) as.character(shp_join$map_key_alt) else rep(NA_character_, nrow(shp_join))
+      shape_label_base <- if ("map_label" %in% names(shp_join)) as.character(shp_join$map_label) else as.character(shape_key_1)
+      shape_key_3 <- normalize_shape_key(shape_label_base, level = nivel)
+      shape_key_4 <- if (nivel %in% c("gve", "drs")) extract_numeric_geo_key(shape_label_base, level = nivel) else rep(NA_character_, nrow(shp_join))
+
+      lookup_keys <- mapa_lookup$join_key
+      idx_1 <- match(shape_key_1, lookup_keys)
+      idx_2 <- match(shape_key_2, lookup_keys)
+      idx_3 <- match(shape_key_3, lookup_keys)
+      idx_4 <- match(shape_key_4, lookup_keys)
+
+      idx_match <- ifelse(
+        !is.na(idx_1), idx_1,
+        ifelse(!is.na(idx_2), idx_2, ifelse(!is.na(idx_3), idx_3, idx_4))
+      )
+
+      shp_join$join_key <- lookup_keys[idx_match]
+      shp_join$rotulo_dado <- mapa_lookup$rotulo_dado[idx_match]
+      shp_join$casos <- mapa_lookup$casos[idx_match]
+      shp_join$surtos <- mapa_lookup$surtos[idx_match]
+      shp_join$populacao <- mapa_lookup$populacao[idx_match]
+      shp_join$incidencia <- mapa_lookup$incidencia[idx_match]
+      shp_join$status_surto <- mapa_lookup$status_surto[idx_match]
+      shp_join$faixa_incidencia <- mapa_lookup$faixa_incidencia[idx_match]
+
+      matched_polygons <- sum(!is.na(shp_join$casos))
+      if (matched_polygons > 0) {
+        shp_join$label_exibicao <- ifelse(
+          is.na(shp_join$rotulo_dado) | shp_join$rotulo_dado == "",
+          shape_label_base,
+          shp_join$rotulo_dado
+        )
+        shp_join$label_exibicao <- sanitize_map_label(shp_join$label_exibicao)
+
+        shp_join$surto_exibicao <- ifelse(
+          is.na(shp_join$status_surto) | shp_join$status_surto == "",
+          "Sem dados",
+          as.character(shp_join$status_surto)
+        )
+
+        shp_join$faixa_exibicao <- ifelse(
+          is.na(shp_join$faixa_incidencia) | shp_join$faixa_incidencia == "",
+          "Sem dados",
+          as.character(shp_join$faixa_incidencia)
+        )
+
+        shp_join$layer_id <- ifelse(
+          !is.na(shp_join$rotulo_dado) & shp_join$rotulo_dado != "",
+          normalize_key(shp_join$rotulo_dado),
+          dplyr::coalesce(shp_join$join_key, shape_key_1)
+        )
+        shp_join$layer_id[is.na(shp_join$layer_id) | shp_join$layer_id == ""] <- paste0("shape_", seq_len(nrow(shp_join)))
+
+        shp_join$tooltip <- ifelse(
+          is.na(shp_join$casos),
+          paste0("<strong>", shp_join$label_exibicao, "</strong><br>Sem notificações para os filtros"),
+          paste0(
+            "<strong>", shp_join$label_exibicao, "</strong><br>",
+            "Casos: ", format(round(shp_join$casos), big.mark = ".", decimal.mark = ","), "<br>",
+            "Incidência: ", format(round(shp_join$incidencia, 2), decimal.mark = ","), "/100 mil<br>",
+            "Faixa de incidência: ", shp_join$faixa_exibicao, "<br>",
+            "Situação de surto: ", shp_join$surto_exibicao
+          )
+        )
+
+        titulo_legenda <- ifelse(
+          shape_source == "local",
+          "Faixa de incidência (/100 mil)",
+          "Faixa de incidência (/100 mil) - fallback"
+        )
+
+        return(
+          leaflet(shp_join) %>%
+            addProviderTiles("CartoDB.Positron") %>%
+            addPolygons(
+              fillColor = ~pal(faixa_incidencia),
+              color = "#d1d5db",
+              weight = 1,
+              fillOpacity = 0.8,
+              smoothFactor = 0.2,
+              layerId = ~layer_id,
+              popup = ~htmltools::HTML(tooltip),
+              highlightOptions = highlightOptions(weight = 2, color = "#005ca9", bringToFront = TRUE)
+            ) %>%
+            addLegend(
+              colors = unname(pal(incidencia_faixas)),
+              labels = incidencia_faixas,
+              title = titulo_legenda,
+              position = "bottomright",
+              opacity = 0.9
+            )
+        )
+      }
     }
 
     pontos_base <- pontos_base_mapa()
@@ -1889,7 +1996,9 @@ server <- function(input, output, session) {
     match_tbl <- df_mapa %>%
       filter(
         map_key == clicked_id |
+          map_key_alt == clicked_id |
           normalize_key(map_key) == clicked_key |
+          normalize_key(map_key_alt) == clicked_key |
           normalize_key(rotulo) == clicked_key
       )
 

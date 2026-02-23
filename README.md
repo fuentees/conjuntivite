@@ -64,7 +64,7 @@ Também são reconhecidos automaticamente formatos comuns da sua base, como:
 
 Esses campos são transformados para a estrutura interna:
 
-`ano`, `semana`, `drs`, `gve`, `municipio`, `casos`, `populacao`, `incidencia`, `surtos`,
+`ano`, `semana`, `drs`, `drs_codigo`, `gve`, `gve_codigo`, `municipio`, `casos`, `populacao`, `incidencia`, `surtos`,
 `sexo_masc`, `sexo_fem`, `fx_menor1`, `fx_1a4`, `fx_5a9`, `fx_10a14`, `fx_15mais`,
 `acao_educativa`, `treinamentos`, `coleta_material`, `encaminhamentos`
 
@@ -84,7 +84,9 @@ Se os nomes das colunas no banco forem diferentes do dicionário, você pode map
 
 ```bash
 export OFTALMO_COL_GVE="nome_real_coluna_gve"
+export OFTALMO_COL_GVE_CODIGO="nome_real_coluna_codigo_gve"
 export OFTALMO_COL_DRS="nome_real_coluna_drs"
+export OFTALMO_COL_DRS_CODIGO="nome_real_coluna_codigo_drs"
 export OFTALMO_COL_MUNICIPIO="nome_real_coluna_municipio"
 export OFTALMO_COL_UVIS="nome_real_coluna_uvis"
 export OFTALMO_COL_CASOS="nome_real_coluna_casos"

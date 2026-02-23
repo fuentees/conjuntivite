@@ -172,6 +172,21 @@ sanitize_numeric_values <- function(values, default = 0) {
   values
 }
 
+sanitize_geo_code <- function(values) {
+  values_chr <- trimws(as.character(values))
+  values_chr[is.na(values_chr) | values_chr == "" | tolower(values_chr) %in% c("na", "n/a", "null")] <- NA_character_
+
+  numeric_part <- ifelse(
+    !is.na(values_chr) & grepl("\\d+", values_chr),
+    suppressWarnings(as.integer(sub(".*?(\\d+).*", "\\1", values_chr))),
+    NA_integer_
+  )
+
+  out <- ifelse(!is.na(numeric_part), as.character(numeric_part), values_chr)
+  out[is.na(out) | out == ""] <- NA_character_
+  out
+}
+
 sanitize_count_or_flag <- function(values, default = 0) {
   values_chr <- trimws(tolower(as.character(values)))
   values_chr[is.na(values_chr)] <- ""
@@ -546,15 +561,38 @@ get_local_shape_layer <- local({
       return(NULL)
     }
 
+    candidate_cols <- get_shape_candidate_columns(level)
+    shp_cols <- names(shp)
+    shp_cols_lower <- tolower(shp_cols)
+    idx_candidates <- match(tolower(candidate_cols), shp_cols_lower)
+    idx_candidates <- idx_candidates[!is.na(idx_candidates)]
+    candidate_matches <- unique(shp_cols[idx_candidates])
+    candidate_matches <- setdiff(candidate_matches, key_col)
+
+    alt_key_col <- NULL
+    if (length(candidate_matches) > 0) {
+      alt_key_col <- candidate_matches[1]
+    } else {
+      char_cols <- shp_cols[
+        vapply(shp, function(x) is.character(x) || is.factor(x), logical(1)) &
+          shp_cols != key_col
+      ]
+      if (length(char_cols) > 0) {
+        alt_key_col <- char_cols[1]
+      }
+    }
+
     shp <- shp %>%
       mutate(
         map_key = normalize_shape_key(.data[[key_col]], level = level),
+        map_key_alt = if (!is.null(alt_key_col)) normalize_shape_key(.data[[alt_key_col]], level = level) else NA_character_,
         map_label = as.character(.data[[key_col]])
       )
 
     attr(shp, "shape_level") <- level
     attr(shp, "shape_path") <- shp_path
     attr(shp, "shape_key_column") <- key_col
+    attr(shp, "shape_key_alt_column") <- alt_key_col
 
     assign(cache_key, shp, envir = cache)
     shp
@@ -616,6 +654,12 @@ prepare_oftalmo_dataset <- function(raw_data) {
     candidates = c("GVE_NOME", "gve_nome", "dominio_gve", "gve", "gve_numero"),
     regex_candidates = c("gve", "grupo.*vigil", "vigilancia.*epid")
   )
+  gve_code_col <- pick_column_with_override(
+    raw_data,
+    override_env_var = "OFTALMO_COL_GVE_CODIGO",
+    candidates = c("gve_numero", "GVE_NUMERO", "CodMacroGVE", "cod_macro_gve", "cod_gve", "codigo_gve"),
+    regex_candidates = c("gve.*num", "cod.*gve", "macro.*gve")
+  )
   uvis_col <- pick_column_with_override(
     raw_data,
     override_env_var = "OFTALMO_COL_UVIS",
@@ -627,6 +671,12 @@ prepare_oftalmo_dataset <- function(raw_data) {
     override_env_var = "OFTALMO_COL_DRS",
     candidates = c("DRS_NOME", "drs_nome", "dominio_drs", "drs", "DRS", "drs_numero"),
     regex_candidates = c("\\bdrs\\b", "diretoria.*regional", "regional.*saude")
+  )
+  drs_code_col <- pick_column_with_override(
+    raw_data,
+    override_env_var = "OFTALMO_COL_DRS_CODIGO",
+    candidates = c("drs_numero", "DRS_NUMERO", "cod_drs", "codigo_drs"),
+    regex_candidates = c("drs.*num", "cod.*drs")
   )
   casos_col <- pick_column_with_override(
     raw_data,
@@ -744,9 +794,11 @@ prepare_oftalmo_dataset <- function(raw_data) {
       semana_registro = if (!is.null(semana_col)) suppressWarnings(as.integer(.data[[semana_col]])) else NA_integer_,
       municipio = sanitize_dimension_values(.data[[municipio_col]]),
       gve = sanitize_dimension_values(.data[[gve_col]]),
+      gve_codigo = if (!is.null(gve_code_col)) sanitize_geo_code(.data[[gve_code_col]]) else NA_character_,
       uvis = if (!is.null(uvis_col)) sanitize_dimension_values(.data[[uvis_col]], default = NA_character_) else NA_character_,
       uvis = ifelse(normalize_key(municipio) == "sao paulo", uvis, NA_character_),
       drs = if (!is.null(drs_col)) sanitize_dimension_values(.data[[drs_col]]) else "Não informado",
+      drs_codigo = if (!is.null(drs_code_col)) sanitize_geo_code(.data[[drs_code_col]]) else NA_character_,
       drs = ifelse(
         drs == "Não informado",
         sanitize_dimension_values(infer_drs_from_gve_text(gve), default = "Não informado"),
@@ -780,6 +832,8 @@ prepare_oftalmo_dataset <- function(raw_data) {
       encaminhamentos = if (!is.null(encaminhamento_col)) sanitize_count_or_flag(.data[[encaminhamento_col]], default = 0) else 0
     ) %>%
     mutate(
+      gve_codigo = sanitize_geo_code(gve_codigo),
+      drs_codigo = sanitize_geo_code(drs_codigo),
       ano = dplyr::coalesce(ano_registro, year(data_notificacao)),
       semana = dplyr::coalesce(semana_registro, isoweek(data_notificacao)),
       semana = pmin(pmax(semana, 1), 53),
@@ -798,7 +852,7 @@ prepare_oftalmo_dataset <- function(raw_data) {
       encaminhamentos = ifelse(is.na(encaminhamentos), 0, pmax(round(encaminhamentos), 0))
     ) %>%
     filter(!is.na(ano), !is.na(semana)) %>%
-    group_by(ano, semana, drs, gve, municipio, uvis, populacao) %>%
+    group_by(ano, semana, drs, drs_codigo, gve, gve_codigo, municipio, uvis, populacao) %>%
     summarise(
       casos = sum(casos, na.rm = TRUE),
       surtos = sum(surtos, na.rm = TRUE),
@@ -854,6 +908,15 @@ generate_mock_data <- function() {
   }) %>%
     bind_rows()
 
+  gve_code_lookup <- setNames(
+    as.character(seq_along(unique(known_gves))),
+    unique(known_gves)
+  )
+  drs_code_lookup <- setNames(
+    as.character(seq_along(unique(names(drs_gve_mapping)))),
+    unique(names(drs_gve_mapping))
+  )
+
   anos <- 2022:year(Sys.Date())
   semanas <- 1:52
 
@@ -869,6 +932,8 @@ generate_mock_data <- function() {
       lambda = pmax(1.5, 4 + ciclo_sazonal + tendencia + ruido),
       casos = rpois(n(), lambda = lambda),
       populacao = infer_population(municipio),
+      gve_codigo = unname(gve_code_lookup[gve]),
+      drs_codigo = unname(drs_code_lookup[drs]),
       surtos = ifelse(casos > quantile(casos, 0.9, na.rm = TRUE), 1, 0),
       prop_masc = runif(n(), min = 0.44, max = 0.56),
       sexo_masc = pmax(round(casos * prop_masc), 0),
@@ -896,7 +961,7 @@ generate_mock_data <- function() {
       incidencia = round((casos / populacao) * 100000, 2)
     ) %>%
     select(
-      ano, semana, drs, gve, municipio, uvis, casos, populacao, incidencia, surtos,
+      ano, semana, drs, drs_codigo, gve, gve_codigo, municipio, uvis, casos, populacao, incidencia, surtos,
       sexo_masc, sexo_fem, fx_menor1, fx_1a4, fx_5a9, fx_10a14, fx_15mais,
       acao_educativa, treinamentos, coleta_material, encaminhamentos
     ) %>%

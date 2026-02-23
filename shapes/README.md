@@ -41,6 +41,7 @@ O app tenta detectar automaticamente a coluna de chave por nível:
 - DRS: `drs`, `nome_drs`, `regional_saude`, etc.
 
 Se o nome da coluna for diferente, o app usa fallback para a primeira coluna textual e, se necessário, para a primeira coluna não geométrica (inclusive código numérico).
+Quando existirem colunas de nome e de código, o app tenta ambas as chaves para maximizar a correspondência com os dados do painel.
 
 ## Dica de qualidade
 
