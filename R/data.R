@@ -299,37 +299,143 @@ shape_default_paths <- c(
   drs = file.path("shapes", "drs", "drs.shp")
 )
 
+shape_level_tokens <- function(level = c("municipio", "gve", "drs")) {
+  level <- match.arg(level)
+
+  switch(
+    level,
+    municipio = c("municipio", "muni", "ibge", "cidade"),
+    gve = c("gve", "grupo", "vigilancia"),
+    drs = c("drs", "diretoria", "regional", "saude")
+  )
+}
+
 find_shape_file <- function(level = c("municipio", "gve", "drs")) {
   level <- match.arg(level)
   env_name <- unname(shape_file_envvars[level])
-  configured_path <- Sys.getenv(env_name, unset = "")
+  configured_path <- trimws(Sys.getenv(env_name, unset = ""))
+  default_path <- unname(shape_default_paths[level])
+  default_dir <- dirname(default_path)
 
-  candidates <- c(configured_path, unname(shape_default_paths[level]))
-  candidates <- candidates[candidates != ""]
-
-  for (path in unique(candidates)) {
-    if (file.exists(path) && grepl("\\.shp$", path, ignore.case = TRUE)) {
+  normalize_existing_path <- function(path) {
+    if (is.null(path) || path == "" || !file.exists(path)) {
       return(path)
     }
+    normalizePath(path, winslash = "/", mustWork = FALSE)
   }
 
-  default_dir <- dirname(unname(shape_default_paths[level]))
-  if (!dir.exists(default_dir)) {
-    return(NULL)
+  collect_shape_files <- function(path_candidate, recursive = FALSE) {
+    if (is.null(path_candidate) || path_candidate == "") {
+      return(character())
+    }
+
+    path_candidate <- trimws(path_candidate)
+    if (path_candidate == "") {
+      return(character())
+    }
+
+    if (file.exists(path_candidate) &&
+      !dir.exists(path_candidate) &&
+      grepl("\\.shp$", path_candidate, ignore.case = TRUE)) {
+      return(path_candidate)
+    }
+
+    if (!file.exists(path_candidate) && !grepl("\\.shp$", path_candidate, ignore.case = TRUE)) {
+      with_ext <- paste0(path_candidate, ".shp")
+      if (file.exists(with_ext)) {
+        return(with_ext)
+      }
+    }
+
+    if (dir.exists(path_candidate)) {
+      return(
+        list.files(
+          path = path_candidate,
+          pattern = "\\.shp$",
+          full.names = TRUE,
+          recursive = recursive,
+          ignore.case = TRUE
+        )
+      )
+    }
+
+    character()
   }
 
-  shp_files <- list.files(
-    path = default_dir,
-    pattern = "\\.shp$",
-    full.names = TRUE,
-    ignore.case = TRUE
+  candidate_files <- character()
+  candidate_files <- c(candidate_files, collect_shape_files(configured_path, recursive = TRUE))
+  candidate_files <- c(candidate_files, collect_shape_files(default_path, recursive = FALSE))
+  candidate_files <- c(candidate_files, collect_shape_files(default_dir, recursive = FALSE))
+
+  search_roots <- c(
+    file.path("shapes", level),
+    file.path("shapes", toupper(level)),
+    file.path("shapes", tools::toTitleCase(level)),
+    "shapes",
+    file.path("mapas", level),
+    "mapas",
+    "."
   )
 
-  if (length(shp_files) == 0) {
+  for (root in unique(search_roots)) {
+    candidate_files <- c(candidate_files, collect_shape_files(root, recursive = root != "."))
+  }
+
+  candidate_files <- unique(candidate_files[file.exists(candidate_files)])
+  if (length(candidate_files) == 0) {
     return(NULL)
   }
 
-  shp_files[1]
+  tokens <- shape_level_tokens(level)
+  configured_norm <- normalize_existing_path(configured_path)
+  default_norm <- normalize_existing_path(default_path)
+  default_dir_norm <- normalize_existing_path(default_dir)
+
+  has_token <- function(text_value) {
+    text_value <- normalize_key(text_value)
+    any(vapply(tokens, function(tok) grepl(tok, text_value, fixed = TRUE), logical(1)))
+  }
+
+  score_shape_file <- function(path) {
+    path_norm <- normalize_existing_path(path)
+    base_name <- tools::file_path_sans_ext(basename(path))
+    dir_name <- dirname(path)
+
+    score <- 0
+
+    if (!is.null(configured_norm) && configured_norm != "") {
+      if (!dir.exists(configured_path) && identical(path_norm, configured_norm)) {
+        score <- score + 1000
+      } else if (dir.exists(configured_path)) {
+        configured_dir_norm <- normalize_existing_path(configured_path)
+        if (!is.null(configured_dir_norm) && configured_dir_norm != "" &&
+          startsWith(path_norm, configured_dir_norm)) {
+          score <- score + 700
+        }
+      }
+    }
+
+    if (!is.null(default_norm) && default_norm != "" && identical(path_norm, default_norm)) {
+      score <- score + 500
+    }
+
+    if (!is.null(default_dir_norm) && default_dir_norm != "" && startsWith(path_norm, default_dir_norm)) {
+      score <- score + 120
+    }
+
+    if (has_token(base_name)) {
+      score <- score + 250
+    }
+
+    if (has_token(dir_name)) {
+      score <- score + 120
+    }
+
+    score - (nchar(path_norm) / 1000)
+  }
+
+  scores <- vapply(candidate_files, score_shape_file, numeric(1))
+  candidate_files[which.max(scores)]
 }
 
 get_shape_candidate_columns <- function(level = c("municipio", "gve", "drs")) {
@@ -338,16 +444,20 @@ get_shape_candidate_columns <- function(level = c("municipio", "gve", "drs")) {
   switch(
     level,
     municipio = c(
-      "municipio", "municipio_nome", "municipio_nm", "name_muni",
-      "nm_mun", "nm_municip", "nome", "name"
+      "municipio", "municipio_nome", "municipio_nm", "nome_municipio",
+      "name_muni", "nm_mun", "nm_municip", "nm_municipio",
+      "cd_mun", "cod_mun", "cod_ibge", "codigo_ibge", "nome", "name"
     ),
     gve = c(
       "gve", "dominio_gve", "nome_gve", "nm_gve", "grupo_vigilancia",
-      "grupo_vig", "name", "nome"
+      "grupo_vig", "gve_numero", "cod_gve", "codigo_gve", "id_gve",
+      "cd_gve", "codmacro", "cod_macro", "codmacrogve", "cod_macro_gve",
+      "name", "nome"
     ),
     drs = c(
       "drs", "nome_drs", "nm_drs", "diretoria_regional",
-      "regional_saude", "name", "nome"
+      "regional_saude", "drs_numero", "cod_drs", "codigo_drs", "id_drs",
+      "cd_drs", "name", "nome"
     )
   )
 }
@@ -369,6 +479,12 @@ guess_shape_key_column <- function(shp, level = c("municipio", "gve", "drs")) {
   char_cols <- cols[vapply(shp, function(x) is.character(x) || is.factor(x), logical(1))]
   if (length(char_cols) > 0) {
     return(char_cols[1])
+  }
+
+  # Fallback para primeira coluna não-geométrica (inclui códigos numéricos).
+  non_geom_cols <- cols[!vapply(shp, function(x) inherits(x, "sfc"), logical(1))]
+  if (length(non_geom_cols) > 0) {
+    return(non_geom_cols[1])
   }
 
   NULL

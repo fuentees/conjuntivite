@@ -20,11 +20,17 @@ Cada camada pode ter qualquer nome de arquivo `.shp`, desde que os arquivos auxi
    - `MAPA_SHAPE_MUNICIPIO`
    - `MAPA_SHAPE_GVE`
    - `MAPA_SHAPE_DRS`
+   - Pode ser arquivo `.shp` direto ou pasta com shapefiles.
 2. Caminho padrão:
    - `shapes/municipio/municipio.shp`
    - `shapes/gve/gve.shp`
    - `shapes/drs/drs.shp`
-3. Primeiro `.shp` encontrado na pasta do nível.
+3. Busca automática adicional:
+   - `shapes/<nível>/` (incluindo variações de maiúsculas/minúsculas)
+   - `shapes/`
+   - `mapas/`
+   - raiz do projeto
+4. Quando houver múltiplos arquivos, o app prioriza nomes/pastas que combinem com o nível (ex.: `gve-shape.shp` para GVE).
 
 ## Coluna-chave para junção (detecção automática)
 
@@ -34,7 +40,7 @@ O app tenta detectar automaticamente a coluna de chave por nível:
 - GVE: `gve`, `dominio_gve`, `nome_gve`, etc.
 - DRS: `drs`, `nome_drs`, `regional_saude`, etc.
 
-Se o nome da coluna for diferente, o app usa fallback para a primeira coluna textual.
+Se o nome da coluna for diferente, o app usa fallback para a primeira coluna textual e, se necessário, para a primeira coluna não geométrica (inclusive código numérico).
 
 ## Dica de qualidade
 

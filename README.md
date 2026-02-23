@@ -131,6 +131,8 @@ Você pode colocar os arquivos geográficos locais para cada nível:
 - `shapes/gve/`
 - `shapes/drs/`
 
+Também funciona com nomes flexíveis (ex.: `GVE-shape.shp`, `drs_regional.shp`), desde que o arquivo esteja em uma dessas pastas ou em `shapes/`.
+
 Arquivos esperados na pasta da camada:
 
 - `.shp`
@@ -146,6 +148,8 @@ export MAPA_SHAPE_MUNICIPIO="/caminho/municipios.shp"
 export MAPA_SHAPE_GVE="/caminho/gve.shp"
 export MAPA_SHAPE_DRS="/caminho/drs.shp"
 ```
+
+> Dica: a variável de ambiente pode apontar para um arquivo `.shp` **ou para uma pasta** contendo os shapefiles.
 
 Mais detalhes em `shapes/README.md`.
 
