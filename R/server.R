@@ -897,7 +897,7 @@ server <- function(input, output, session) {
         mutate(
           media_hist = tidyr::replace_na(media_hist, 0),
           dp_hist = tidyr::replace_na(dp_hist, 0),
-          ucl_hist = tidyr::replace_na(ucl_hist, media_hist),
+          ucl_hist = dplyr::coalesce(ucl_hist, media_hist),
           zscore = ifelse(dp_hist > 0, (casos - media_hist) / dp_hist, 0),
           media_movel4 = roll_mean(casos, k = 4),
           media_movel4_prev = dplyr::lag(media_movel4, n = 4, default = dplyr::first(media_movel4)),
