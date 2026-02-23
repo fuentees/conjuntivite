@@ -279,30 +279,6 @@ ui <- tagList(
         br(),
         layout_columns(
           col_widths = c(6, 6),
-          value_box(
-            title = "Risco preditivo (IA)",
-            value = textOutput("risco_ia_nivel"),
-            subtitle = textOutput("risco_ia_prob"),
-            showcase = icon("brain"),
-            theme = "warning",
-            class = "h-100"
-          ),
-          value_box(
-            title = "Semanas críticas previstas",
-            value = textOutput("semanas_criticas_previstas"),
-            subtitle = textOutput("resumo_tendencia_curta"),
-            showcase = icon("chart-line"),
-            theme = "danger",
-            class = "h-100"
-          )
-        ),
-        div(
-          class = "legend-note px-1",
-          HTML("<strong>Legenda IA:</strong> BAIXO &lt; 50% | MODERADO 50-69% | ALTO 70-84% | CRÍTICO &ge; 85% de probabilidade de surto.")
-        ),
-        br(),
-        layout_columns(
-          col_widths = c(6, 6),
           card(
             class = "custom-card",
             card_header("Série temporal — casos por semana epidemiológica (barras)"),
@@ -318,68 +294,13 @@ ui <- tagList(
         ),
         br(),
         layout_columns(
-          col_widths = c(6, 6),
+          col_widths = c(12),
           card(
             class = "custom-card",
             card_header("Modelo de tendência semanal (projeção curta)"),
             plotlyOutput("grafico_tendencia", height = "350px"),
             full_screen = TRUE
-          ),
-          card(
-            class = "custom-card",
-            card_header("Motor de alerta preditivo de surtos (IA)"),
-            plotlyOutput("grafico_alerta_ia", height = "350px"),
-            full_screen = TRUE
           )
-        ),
-        br(),
-        layout_columns(
-          col_widths = c(3, 3, 3, 3),
-          value_box(
-            title = "Backtest IA — acurácia",
-            value = textOutput("ia_bt_acuracia"),
-            showcase = icon("bullseye"),
-            theme = "info",
-            class = "h-100"
-          ),
-          value_box(
-            title = "Backtest IA — precisão",
-            value = textOutput("ia_bt_precisao"),
-            showcase = icon("crosshairs"),
-            theme = "primary",
-            class = "h-100"
-          ),
-          value_box(
-            title = "Backtest IA — sensibilidade",
-            value = textOutput("ia_bt_sensibilidade"),
-            showcase = icon("search"),
-            theme = "warning",
-            class = "h-100"
-          ),
-          value_box(
-            title = "Backtest IA — F1",
-            value = textOutput("ia_bt_f1"),
-            showcase = icon("chart-line"),
-            theme = "success",
-            class = "h-100"
-          )
-        ),
-        div(
-          class = "d-flex justify-content-end mt-1",
-          span(textOutput("ia_bt_amostra", inline = TRUE), class = "text-chip")
-        ),
-        br(),
-        card(
-          class = "custom-card",
-          card_header("Validação histórica da IA (backtest)"),
-          card_body(
-            plotlyOutput("grafico_validacao_ia", height = "320px"),
-            tags$small(
-              class = "legend-note d-block mt-2",
-              "Legenda backtest: acurácia = acerto geral; precisão = acerto quando IA alerta; sensibilidade = capacidade de captar surtos; F1 = equilíbrio entre precisão e sensibilidade."
-            )
-          ),
-          full_screen = TRUE
         ),
         br(),
         layout_columns(

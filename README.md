@@ -16,10 +16,8 @@ Aplicativo Shiny para monitoramento semanal de conjuntivites com interface moder
   2. Canal endêmico (média histórica + limites + ano selecionado, com referência sem 2011)
   3. Casos por GVE
   4. Modelo de tendência semanal com projeção curta
-  5. Motor preditivo de risco de surto (IA explicável)
-  6. Distribuição por sexo e faixa etária
-  7. Ações/treinamentos realizados
-  8. Validação histórica da IA (backtest anual)
+  5. Distribuição por sexo e faixa etária
+  6. Ações/treinamentos realizados
 - Mapa interativo territorial (leaflet):
   - Níveis: Município, GVE e DRS
   - Vinculado aos filtros de Ano, DRS, GVE e Município
@@ -33,13 +31,9 @@ Aplicativo Shiny para monitoramento semanal de conjuntivites com interface moder
   - Formatação numérica brasileira (milhares com `.`)
   - Alerta visual em verde/vermelho baseado na incidência de 4 semanas
   - Sincronização com o mapa por incidência
-- Bloco de validação de IA:
-  - Acurácia, precisão, sensibilidade e F1 em backtest histórico
-  - Comparação anual entre taxa observada de surtos e taxa prevista de alertas
-- Legendas operacionais no painel:
-  - Faixas de risco da IA
-  - Interpretação das métricas de backtest
-  - Regras de cor na tabela e leitura rápida do mapa
+- IA executada em segundo plano:
+  - Geração automática de alertas preditivos sem painel visual dedicado
+  - Notificação operacional quando risco preditivo for ALTO/CRÍTICO
 
 ## Fonte de dados
 

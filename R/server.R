@@ -1084,103 +1084,60 @@ server <- function(input, output, session) {
     )
   })
 
-  output$risco_ia_nivel <- renderText({
-    ia_resumo_atual()$nivel
-  })
+  alerta_ia_cache <- reactiveVal("")
 
-  output$risco_ia_prob <- renderText({
-    paste0(round(ia_resumo_atual()$prob * 100, 1), "% de probabilidade")
-  })
-
-  output$semanas_criticas_previstas <- renderText({
-    as.character(ia_resumo_atual()$semanas_criticas)
-  })
-
-  output$resumo_tendencia_curta <- renderText({
-    ia_resumo_atual()$mensagem
-  })
-
-  format_metric_pct <- function(x, digits = 1) {
-    if (!is.finite(x)) {
-      return("N/A")
-    }
-    paste0(format(round(x * 100, digits), decimal.mark = ","), "%")
-  }
-
-  output$ia_bt_acuracia <- renderText({
-    format_metric_pct(backtest_ia()$metrics_global$acuracia)
-  })
-
-  output$ia_bt_precisao <- renderText({
-    format_metric_pct(backtest_ia()$metrics_global$precisao)
-  })
-
-  output$ia_bt_sensibilidade <- renderText({
-    format_metric_pct(backtest_ia()$metrics_global$sensibilidade)
-  })
-
-  output$ia_bt_f1 <- renderText({
-    format_metric_pct(backtest_ia()$metrics_global$f1)
-  })
-
-  output$ia_bt_amostra <- renderText({
-    bt <- backtest_ia()
-    n_sem <- bt$metrics_global$n
-    n_anos <- if (nrow(bt$metrics_year) > 0) n_distinct(bt$metrics_year$ano) else 0
-    paste0("Backtest: ", n_sem, " semanas avaliadas em ", n_anos, " anos")
-  })
-
-  output$grafico_validacao_ia <- renderPlotly({
-    bt <- backtest_ia()
-    df_year <- bt$metrics_year
-
-    if (nrow(df_year) == 0) {
-      return(empty_plotly("Sem histórico suficiente para validar a IA"))
-    }
-
-    plot_ly() %>%
-      add_bars(
-        data = df_year,
-        x = ~ano,
-        y = ~taxa_obs,
-        name = "Taxa observada de surto",
-        marker = list(color = "rgba(211,47,47,0.45)")
-      ) %>%
-      add_trace(
-        data = df_year,
-        x = ~ano,
-        y = ~taxa_prev,
-        type = "scatter",
-        mode = "lines+markers",
-        name = "Taxa prevista de alerta",
-        line = list(color = "#6a1b9a", width = 2.2)
-      ) %>%
-      add_trace(
-        data = df_year,
-        x = ~ano,
-        y = ~f1,
-        type = "scatter",
-        mode = "lines+markers",
-        name = "F1 por ano",
-        line = list(color = "#2e7d32", width = 2, dash = "dot")
-      ) %>%
-      layout(
-        barmode = "group",
-        hovermode = "x unified",
-        legend = list(orientation = "h", x = 0, y = 1.10),
-        margin = list(l = 55, r = 20, t = 10, b = 45),
-        plot_bgcolor = "rgba(245,245,245,0.5)",
-        paper_bgcolor = "white",
-        xaxis = list(title = "Ano avaliado", showgrid = FALSE),
-        yaxis = list(
-          title = "Proporção",
-          tickformat = ".0%",
-          range = c(0, 1),
-          showgrid = TRUE,
-          gridcolor = "#e5e7eb"
-        )
+  observeEvent(
+    {
+      list(
+        selected_year(),
+        input$filtro_ano,
+        input$filtro_drs,
+        input$filtro_gve,
+        input$filtro_municipio,
+        input$filtro_uvis
       )
-  })
+    },
+    {
+      ia <- ia_resumo_atual()
+      safe_input <- function(x, default) {
+        if (is.null(x) || length(x) == 0 || is.na(x[1])) {
+          return(default)
+        }
+        as.character(x[1])
+      }
+
+      chave_alerta <- paste(
+        selected_year(),
+        safe_input(input$filtro_ano, "Todos"),
+        safe_input(input$filtro_drs, "Todas"),
+        safe_input(input$filtro_gve, "Todas"),
+        safe_input(input$filtro_municipio, "Todos"),
+        safe_input(input$filtro_uvis, "Todas"),
+        ia$nivel,
+        sep = "|"
+      )
+
+      if (identical(chave_alerta, alerta_ia_cache())) {
+        return(invisible(NULL))
+      }
+
+      alerta_ia_cache(chave_alerta)
+
+      if (ia$nivel %in% c("ALTO", "CRITICO")) {
+        showNotification(
+          paste0(
+            "Alerta preditivo IA (", ia$nivel, "): ",
+            ia$mensagem,
+            " Probabilidade atual: ",
+            round(ia$prob * 100, 1), "%."
+          ),
+          type = "warning",
+          duration = 8
+        )
+      }
+    },
+    ignoreInit = TRUE
+  )
 
   output$grafico_tendencia <- renderPlotly({
     modelo <- modelo_tendencia()
@@ -1231,65 +1188,6 @@ server <- function(input, output, session) {
         paper_bgcolor = "white",
         xaxis = list(title = "Semana epidemiológica", showgrid = TRUE, gridcolor = "#e5e7eb"),
         yaxis = list(title = "Casos", showgrid = TRUE, gridcolor = "#e5e7eb")
-      )
-  })
-
-  output$grafico_alerta_ia <- renderPlotly({
-    motor <- motor_alerta_ia()
-    obs <- motor$observado %>% filter(semana_fechada)
-    fut <- motor$futuro
-
-    if (nrow(obs) == 0) {
-      return(empty_plotly("Sem dados para o motor de alerta preditivo"))
-    }
-
-    p <- plot_ly() %>%
-      add_trace(
-        data = obs,
-        x = ~semana,
-        y = ~prob_surto,
-        type = "scatter",
-        mode = "lines",
-        name = "Probabilidade observada",
-        line = list(color = "#6a1b9a", width = 2.4)
-      ) %>%
-      add_trace(
-        x = c(min(obs$semana), 53),
-        y = c(0.70, 0.70),
-        type = "scatter",
-        mode = "lines",
-        name = "Limiar de alerta (70%)",
-        line = list(color = "#d32f2f", dash = "dash", width = 1.7)
-      )
-
-    if (nrow(fut) > 0) {
-      p <- p %>%
-        add_trace(
-          data = fut,
-          x = ~semana,
-          y = ~prob_surto,
-          type = "scatter",
-          mode = "lines",
-          name = "Probabilidade prevista",
-          line = list(color = "#ef6c00", dash = "dot", width = 2.2)
-        )
-    }
-
-    p %>%
-      layout(
-        hovermode = "x unified",
-        legend = list(orientation = "h", x = 0, y = 1.10),
-        margin = list(l = 55, r = 20, t = 10, b = 45),
-        plot_bgcolor = "rgba(245,245,245,0.5)",
-        paper_bgcolor = "white",
-        xaxis = list(title = "Semana epidemiológica", showgrid = TRUE, gridcolor = "#e5e7eb"),
-        yaxis = list(
-          title = "Probabilidade de surto",
-          tickformat = ".0%",
-          range = c(0, 1),
-          showgrid = TRUE,
-          gridcolor = "#e5e7eb"
-        )
       )
   })
 
