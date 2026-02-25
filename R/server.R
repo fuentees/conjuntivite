@@ -652,7 +652,7 @@ server <- function(input, output, session) {
 
     plot_ly(
       df,
-      x = ~reorder(categoria, casos),
+      x = ~reorder(categoria, -casos),
       y = ~casos,
       type = "bar",
       marker = list(color = "#005ca9", opacity = 0.85),
