@@ -294,11 +294,17 @@ ui <- tagList(
         ),
         br(),
         layout_columns(
-          col_widths = c(12),
+          col_widths = c(6, 6),
           card(
             class = "custom-card",
             card_header("Modelo de tendência semanal (projeção curta)"),
             plotlyOutput("grafico_tendencia", height = "350px"),
+            full_screen = TRUE
+          ),
+          card(
+            class = "custom-card",
+            card_header("Motor de alerta preditivo de surtos (IA)"),
+            plotlyOutput("grafico_alerta_ia", height = "350px"),
             full_screen = TRUE
           )
         ),

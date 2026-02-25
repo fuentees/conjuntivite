@@ -1191,6 +1191,65 @@ server <- function(input, output, session) {
       )
   })
 
+  output$grafico_alerta_ia <- renderPlotly({
+    motor <- motor_alerta_ia()
+    obs <- motor$observado %>% filter(semana_fechada)
+    fut <- motor$futuro
+
+    if (nrow(obs) == 0) {
+      return(empty_plotly("Sem dados para o motor de alerta preditivo"))
+    }
+
+    p <- plot_ly() %>%
+      add_trace(
+        data = obs,
+        x = ~semana,
+        y = ~prob_surto,
+        type = "scatter",
+        mode = "lines",
+        name = "Probabilidade observada",
+        line = list(color = "#6a1b9a", width = 2.4)
+      ) %>%
+      add_trace(
+        x = c(min(obs$semana), 53),
+        y = c(0.70, 0.70),
+        type = "scatter",
+        mode = "lines",
+        name = "Limiar de alerta (70%)",
+        line = list(color = "#d32f2f", dash = "dash", width = 1.7)
+      )
+
+    if (nrow(fut) > 0) {
+      p <- p %>%
+        add_trace(
+          data = fut,
+          x = ~semana,
+          y = ~prob_surto,
+          type = "scatter",
+          mode = "lines",
+          name = "Probabilidade prevista",
+          line = list(color = "#ef6c00", dash = "dot", width = 2.2)
+        )
+    }
+
+    p %>%
+      layout(
+        hovermode = "x unified",
+        legend = list(orientation = "h", x = 0, y = 1.10),
+        margin = list(l = 55, r = 20, t = 10, b = 45),
+        plot_bgcolor = "rgba(245,245,245,0.5)",
+        paper_bgcolor = "white",
+        xaxis = list(title = "Semana epidemiológica", showgrid = TRUE, gridcolor = "#e5e7eb"),
+        yaxis = list(
+          title = "Probabilidade de surto",
+          tickformat = ".0%",
+          range = c(0, 1),
+          showgrid = TRUE,
+          gridcolor = "#e5e7eb"
+        )
+      )
+  })
+
   output$grafico_sexo <- renderPlotly({
     df <- dados_ano_referencia()
 
