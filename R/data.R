@@ -970,11 +970,243 @@ generate_mock_data <- function() {
   dados
 }
 
-load_epidemiological_data <- function(prefer_db = TRUE, allow_mock_fallback = FALSE) {
+ensure_json_dependency <- function() {
+  if (!requireNamespace("jsonlite", quietly = TRUE)) {
+    stop(
+      "Pacote 'jsonlite' não está instalado. Execute install.packages('jsonlite').",
+      call. = FALSE
+    )
+  }
+}
+
+is_internal_oftalmo_dataset <- function(df) {
+  required_cols <- c("ano", "semana", "drs", "gve", "municipio", "casos")
+  all(required_cols %in% tolower(names(df)))
+}
+
+normalize_internal_oftalmo_dataset <- function(df) {
+  if (is.null(df) || nrow(df) == 0) {
+    return(NULL)
+  }
+
+  df <- tibble::as_tibble(df)
+
+  rename_first_match <- function(data, target, candidates) {
+    if (target %in% names(data)) {
+      return(data)
+    }
+
+    cols <- names(data)
+    idx <- match(tolower(candidates), tolower(cols))
+    idx <- idx[!is.na(idx)]
+    if (length(idx) > 0) {
+      names(data)[idx[1]] <- target
+    }
+    data
+  }
+
+  df <- rename_first_match(df, "ano", c("ano", "year"))
+  df <- rename_first_match(df, "semana", c("semana", "sem_epi", "week"))
+  df <- rename_first_match(df, "drs", c("drs", "dominio_drs", "drs_nome"))
+  df <- rename_first_match(df, "drs_codigo", c("drs_codigo", "drs_numero", "cod_drs", "codigo_drs"))
+  df <- rename_first_match(df, "gve", c("gve", "dominio_gve", "gve_nome"))
+  df <- rename_first_match(df, "gve_codigo", c("gve_codigo", "gve_numero", "cod_gve", "codigo_gve"))
+  df <- rename_first_match(df, "municipio", c("municipio", "municipionotificacao"))
+  df <- rename_first_match(df, "uvis", c("uvis"))
+  df <- rename_first_match(df, "casos", c("casos", "totalcaso", "total_caso"))
+  df <- rename_first_match(df, "populacao", c("populacao", "pop"))
+  df <- rename_first_match(df, "incidencia", c("incidencia"))
+  df <- rename_first_match(df, "surtos", c("surtos", "surto"))
+  df <- rename_first_match(df, "sexo_masc", c("sexo_masc", "sexomasc", "sexmasc"))
+  df <- rename_first_match(df, "sexo_fem", c("sexo_fem", "sexofem", "sexfem"))
+  df <- rename_first_match(df, "fx_menor1", c("fx_menor1"))
+  df <- rename_first_match(df, "fx_1a4", c("fx_1a4"))
+  df <- rename_first_match(df, "fx_5a9", c("fx_5a9"))
+  df <- rename_first_match(df, "fx_10a14", c("fx_10a14"))
+  df <- rename_first_match(df, "fx_15mais", c("fx_15mais"))
+  df <- rename_first_match(df, "acao_educativa", c("acao_educativa", "nuacaoeducativa"))
+  df <- rename_first_match(df, "treinamentos", c("treinamentos", "nutreinamento"))
+  df <- rename_first_match(df, "coleta_material", c("coleta_material", "nucoletamaterialbio"))
+  df <- rename_first_match(df, "encaminhamentos", c("encaminhamentos", "nuencamimento", "nuencaminhamento"))
+
+  add_default_col <- function(data, col_name, default_value) {
+    if (!(col_name %in% names(data))) {
+      data[[col_name]] <- rep(default_value, nrow(data))
+    }
+    data
+  }
+
+  df <- add_default_col(df, "drs_codigo", NA_character_)
+  df <- add_default_col(df, "gve_codigo", NA_character_)
+  df <- add_default_col(df, "uvis", NA_character_)
+  df <- add_default_col(df, "populacao", NA_real_)
+  df <- add_default_col(df, "incidencia", NA_real_)
+  df <- add_default_col(df, "surtos", 0)
+  df <- add_default_col(df, "sexo_masc", 0)
+  df <- add_default_col(df, "sexo_fem", 0)
+  df <- add_default_col(df, "fx_menor1", 0)
+  df <- add_default_col(df, "fx_1a4", 0)
+  df <- add_default_col(df, "fx_5a9", 0)
+  df <- add_default_col(df, "fx_10a14", 0)
+  df <- add_default_col(df, "fx_15mais", 0)
+  df <- add_default_col(df, "acao_educativa", 0)
+  df <- add_default_col(df, "treinamentos", 0)
+  df <- add_default_col(df, "coleta_material", 0)
+  df <- add_default_col(df, "encaminhamentos", 0)
+
+  df <- df %>%
+    mutate(
+      ano = suppressWarnings(as.integer(ano)),
+      semana = suppressWarnings(as.integer(semana)),
+      semana = pmin(pmax(semana, 1), 53),
+      drs = sanitize_dimension_values(drs),
+      drs_codigo = sanitize_geo_code(drs_codigo),
+      gve = sanitize_dimension_values(gve),
+      gve_codigo = sanitize_geo_code(gve_codigo),
+      municipio = sanitize_dimension_values(municipio),
+      uvis = sanitize_dimension_values(uvis, default = NA_character_),
+      uvis = ifelse(normalize_key(municipio) == "sao paulo", uvis, NA_character_),
+      casos = ifelse(is.na(casos), 0, pmax(round(sanitize_numeric_values(casos, default = 0)), 0)),
+      populacao = sanitize_numeric_values(populacao, default = NA_real_),
+      populacao = ifelse(is.na(populacao) | !is.finite(populacao) | populacao <= 0, infer_population(municipio), populacao),
+      surtos = ifelse(is.na(surtos), 0, pmax(round(sanitize_numeric_values(surtos, default = 0)), 0)),
+      sexo_masc = ifelse(is.na(sexo_masc), 0, pmax(round(sanitize_numeric_values(sexo_masc, default = 0)), 0)),
+      sexo_fem = ifelse(is.na(sexo_fem), 0, pmax(round(sanitize_numeric_values(sexo_fem, default = 0)), 0)),
+      fx_menor1 = ifelse(is.na(fx_menor1), 0, pmax(round(sanitize_numeric_values(fx_menor1, default = 0)), 0)),
+      fx_1a4 = ifelse(is.na(fx_1a4), 0, pmax(round(sanitize_numeric_values(fx_1a4, default = 0)), 0)),
+      fx_5a9 = ifelse(is.na(fx_5a9), 0, pmax(round(sanitize_numeric_values(fx_5a9, default = 0)), 0)),
+      fx_10a14 = ifelse(is.na(fx_10a14), 0, pmax(round(sanitize_numeric_values(fx_10a14, default = 0)), 0)),
+      fx_15mais = ifelse(is.na(fx_15mais), 0, pmax(round(sanitize_numeric_values(fx_15mais, default = 0)), 0)),
+      acao_educativa = ifelse(is.na(acao_educativa), 0, pmax(round(sanitize_numeric_values(acao_educativa, default = 0)), 0)),
+      treinamentos = ifelse(is.na(treinamentos), 0, pmax(round(sanitize_numeric_values(treinamentos, default = 0)), 0)),
+      coleta_material = ifelse(is.na(coleta_material), 0, pmax(round(sanitize_numeric_values(coleta_material, default = 0)), 0)),
+      encaminhamentos = ifelse(is.na(encaminhamentos), 0, pmax(round(sanitize_numeric_values(encaminhamentos, default = 0)), 0))
+    ) %>%
+    filter(!is.na(ano), !is.na(semana)) %>%
+    group_by(ano, semana, drs, drs_codigo, gve, gve_codigo, municipio, uvis, populacao) %>%
+    summarise(
+      casos = sum(casos, na.rm = TRUE),
+      surtos = sum(surtos, na.rm = TRUE),
+      sexo_masc = sum(sexo_masc, na.rm = TRUE),
+      sexo_fem = sum(sexo_fem, na.rm = TRUE),
+      fx_menor1 = sum(fx_menor1, na.rm = TRUE),
+      fx_1a4 = sum(fx_1a4, na.rm = TRUE),
+      fx_5a9 = sum(fx_5a9, na.rm = TRUE),
+      fx_10a14 = sum(fx_10a14, na.rm = TRUE),
+      fx_15mais = sum(fx_15mais, na.rm = TRUE),
+      acao_educativa = sum(acao_educativa, na.rm = TRUE),
+      treinamentos = sum(treinamentos, na.rm = TRUE),
+      coleta_material = sum(coleta_material, na.rm = TRUE),
+      encaminhamentos = sum(encaminhamentos, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    mutate(
+      incidencia = ifelse(populacao > 0, round((casos / populacao) * 100000, 2), NA_real_)
+    ) %>%
+    arrange(ano, semana, drs, gve, municipio, uvis)
+
+  if (nrow(df) == 0) {
+    return(NULL)
+  }
+
+  df
+}
+
+load_oftalmo_json_data <- function(json_path = "", json_url = "") {
+  json_path <- trimws(as.character(json_path))
+  json_url <- trimws(as.character(json_url))
+
+  if (json_path == "" && json_url == "") {
+    return(NULL)
+  }
+
+  ensure_json_dependency()
+
+  payload <- NULL
+  source_used <- NULL
+
+  if (json_path != "") {
+    if (!file.exists(json_path)) {
+      stop(paste0("Arquivo JSON não encontrado: ", json_path))
+    }
+    payload <- jsonlite::fromJSON(json_path, simplifyDataFrame = TRUE, flatten = TRUE)
+    source_used <- json_path
+  } else if (json_url != "") {
+    payload <- jsonlite::fromJSON(json_url, simplifyDataFrame = TRUE, flatten = TRUE)
+    source_used <- json_url
+  }
+
+  extract_records <- function(x) {
+    if (is.data.frame(x)) {
+      return(x)
+    }
+    if (is.list(x)) {
+      for (nm in c("data", "records", "dados", "items")) {
+        if (!is.null(x[[nm]])) {
+          return(x[[nm]])
+        }
+      }
+    }
+    x
+  }
+
+  records <- extract_records(payload)
+  if (is.null(records)) {
+    return(NULL)
+  }
+
+  if (is.data.frame(records)) {
+    raw_df <- records
+  } else {
+    raw_df <- tryCatch(
+      as.data.frame(records, stringsAsFactors = FALSE),
+      error = function(e) NULL
+    )
+  }
+
+  if (is.null(raw_df) || nrow(raw_df) == 0) {
+    return(NULL)
+  }
+
+  prepared <- if (is_internal_oftalmo_dataset(raw_df)) {
+    normalize_internal_oftalmo_dataset(raw_df)
+  } else {
+    prepare_oftalmo_dataset(raw_df)
+  }
+
+  if (!is.null(prepared)) {
+    attr(prepared, "json_source") <- source_used
+  }
+
+  prepared
+}
+
+load_epidemiological_data <- function(
+  prefer_db = TRUE,
+  prefer_json = FALSE,
+  enable_json = TRUE,
+  json_path = "",
+  json_url = "",
+  allow_mock_fallback = FALSE
+) {
   db_error <- NULL
   db_empty <- FALSE
+  json_error <- NULL
+  json_empty <- FALSE
 
-  if (prefer_db && exists("load_oftalmo_raw_data", mode = "function")) {
+  json_path <- trimws(as.character(json_path))
+  json_url <- trimws(as.character(json_url))
+  has_json_source <- json_path != "" || json_url != ""
+
+  if (prefer_json && !has_json_source) {
+    json_error <- "Modo JSON ativo, mas OFTALMO_JSON_PATH/OFTALMO_JSON_URL não foram configurados."
+  }
+
+  try_load_db <- function() {
+    if (!prefer_db || !exists("load_oftalmo_raw_data", mode = "function")) {
+      return(NULL)
+    }
+
     db_data <- tryCatch(
       {
         raw <- load_oftalmo_raw_data()
@@ -994,21 +1226,87 @@ load_epidemiological_data <- function(prefer_db = TRUE, allow_mock_fallback = FA
       attr(db_data, "data_source") <- "database"
       return(db_data)
     }
+
+    NULL
+  }
+
+  try_load_json <- function() {
+    if (!enable_json || !has_json_source) {
+      return(NULL)
+    }
+
+    json_data <- tryCatch(
+      {
+        prepared <- load_oftalmo_json_data(json_path = json_path, json_url = json_url)
+        if (is.null(prepared) || nrow(prepared) == 0) {
+          json_empty <<- TRUE
+        }
+        prepared
+      },
+      error = function(e) {
+        json_error <<- conditionMessage(e)
+        NULL
+      }
+    )
+
+    if (!is.null(json_data) && nrow(json_data) > 0) {
+      attr(json_data, "data_source") <- "json"
+      return(json_data)
+    }
+
+    NULL
+  }
+
+  source_order <- if (prefer_json) c("json", "db") else c("db", "json")
+  for (source_name in source_order) {
+    data_loaded <- if (identical(source_name, "db")) {
+      try_load_db()
+    } else {
+      try_load_json()
+    }
+
+    if (!is.null(data_loaded) && nrow(data_loaded) > 0) {
+      return(data_loaded)
+    }
   }
 
   if (!allow_mock_fallback) {
-    detailed_reason <- if (!is.null(db_error)) {
-      paste("Erro da conexão/consulta:", db_error)
-    } else if (db_empty) {
-      "A consulta foi executada, mas não retornou dados válidos para o painel."
-    } else {
-      "A função de carga não retornou dados."
+    reasons <- character()
+
+    if (prefer_db) {
+      db_reason <- if (!is.null(db_error)) {
+        paste("Banco: erro na conexão/consulta -", db_error)
+      } else if (db_empty) {
+        "Banco: consulta executada, mas sem dados válidos para o painel."
+      } else if (!exists("load_oftalmo_raw_data", mode = "function")) {
+        "Banco: função load_oftalmo_raw_data não encontrada."
+      } else {
+        "Banco: sem retorno de dados."
+      }
+      reasons <- c(reasons, db_reason)
+    }
+
+    if (enable_json) {
+      json_reason <- if (!has_json_source) {
+        "JSON: OFTALMO_JSON_PATH/OFTALMO_JSON_URL não configurados."
+      } else if (!is.null(json_error)) {
+        paste("JSON: erro na leitura/processamento -", json_error)
+      } else if (json_empty) {
+        "JSON: arquivo/url lido, mas sem dados válidos para o painel."
+      } else {
+        "JSON: sem retorno de dados."
+      }
+      reasons <- c(reasons, json_reason)
+    }
+
+    if (length(reasons) == 0) {
+      reasons <- "Nenhuma fonte de dados foi habilitada (DB/JSON)."
     }
 
     stop(
       paste(
-        "Não foi possível carregar dados do banco.",
-        detailed_reason,
+        "Não foi possível carregar dados para o painel.",
+        paste(reasons, collapse = " "),
         "Como OFTALMO_ALLOW_MOCK está desativado, o app não usará dados simulados."
       )
     )
@@ -1020,11 +1318,32 @@ load_epidemiological_data <- function(prefer_db = TRUE, allow_mock_fallback = FA
 }
 
 allow_mock_fallback <- tolower(Sys.getenv("OFTALMO_ALLOW_MOCK", unset = "false")) %in% c("1", "true", "sim", "yes")
+data_mode <- tolower(trimws(Sys.getenv("OFTALMO_DATA_MODE", unset = "auto")))
+if (!(data_mode %in% c("auto", "db", "json"))) {
+  data_mode <- "auto"
+}
+
+json_path <- trimws(Sys.getenv("OFTALMO_JSON_PATH", unset = ""))
+json_url <- trimws(Sys.getenv("OFTALMO_JSON_URL", unset = ""))
+
 dados_epidemiologicos <- load_epidemiological_data(
-  prefer_db = TRUE,
+  prefer_db = data_mode %in% c("auto", "db"),
+  prefer_json = data_mode == "json",
+  enable_json = data_mode %in% c("auto", "json"),
+  json_path = json_path,
+  json_url = json_url,
   allow_mock_fallback = allow_mock_fallback
 )
 dados_fonte <- attr(dados_epidemiologicos, "data_source")
+if (is.null(dados_fonte) || dados_fonte == "") {
+  dados_fonte <- if (data_mode == "json") {
+    "json"
+  } else if (data_mode == "db") {
+    "database"
+  } else {
+    "auto"
+  }
+}
 
 get_gve_by_drs <- function(drs) {
   sort(unique(dados_epidemiologicos$gve[dados_epidemiologicos$drs == drs]))

@@ -38,9 +38,12 @@ Aplicativo Shiny para monitoramento semanal de conjuntivites com interface moder
 
 ## Fonte de dados
 
-O app carrega dados do banco MariaDB (`OftalmoNotifica9a60`) usando `functions/ConectDb.R`.
+O app pode carregar dados em 3 modos (`OFTALMO_DATA_MODE`):
 
-Por padrão, o app está em modo **DB-first estrito** (sem mock).
+- `auto` (padrão): tenta MariaDB primeiro; se falhar, tenta JSON (quando configurado).
+- `db`: usa somente MariaDB.
+- `json`: usa somente JSON (arquivo local ou URL).
+
 Se você quiser liberar fallback para dados simulados, configure:
 
 ```bash
@@ -108,12 +111,22 @@ export OFTALMO_COL_ENCAMINHAMENTO="nome_real_coluna_encaminhamento"
 export OFTALMO_COL_MEDIDA_ADOTADA="nome_real_coluna_medida_adotada"
 ```
 
+Configuração de fonte JSON (útil para cloud sem acesso ao banco privado):
+
+```bash
+export OFTALMO_DATA_MODE="json"   # auto | db | json
+export OFTALMO_JSON_PATH="/caminho/oftalmo_snapshot.json"
+export OFTALMO_JSON_URL="https://seu-servidor/oftalmo_snapshot.json"
+```
+
+> Quando `OFTALMO_DATA_MODE=json`, o app usa `OFTALMO_JSON_PATH` (se existir) e depois `OFTALMO_JSON_URL`.
+
 ## Instalação
 
 ```r
 install.packages(c(
   "shiny", "bslib", "dplyr", "plotly", "leaflet",
-  "lubridate", "tidyr", "DT", "DBI", "RMariaDB", "geobr", "sf"
+  "lubridate", "tidyr", "DT", "DBI", "RMariaDB", "geobr", "sf", "jsonlite"
 ))
 
 shiny::runApp(".")
@@ -121,6 +134,40 @@ shiny::runApp(".")
 
 > `geobr` e `sf` são recomendados para coroplético com polígonos.
 > Sem eles, o mapa funciona em modo fallback com marcadores.
+
+## Fluxo recomendado para shinyapps.io (banco privado)
+
+Quando o banco (`192.168.x.x`) não está acessível da internet:
+
+1. Rodar um script interno na rede do banco para exportar JSON.
+2. Publicar esse JSON em um local acessível (URL pública ou arquivo sincronizado).
+3. No shinyapps.io, usar `OFTALMO_DATA_MODE=json` + `OFTALMO_JSON_URL`.
+
+### Script de exportação JSON
+
+Arquivo: `functions/ExportOftalmoJson.R`
+
+Exemplo de execução:
+
+```bash
+Rscript functions/ExportOftalmoJson.R --output data/oftalmo_snapshot.json
+```
+
+Ou definindo variável:
+
+```bash
+export OFTALMO_JSON_EXPORT_PATH="data/oftalmo_snapshot.json"
+Rscript functions/ExportOftalmoJson.R
+```
+
+### Automação (agendamento)
+
+- **Windows (Agendador de Tarefas)**: criar tarefa para executar `Rscript.exe functions/ExportOftalmoJson.R` a cada 15 min.
+- **Linux (cron)** exemplo:
+
+```cron
+*/15 * * * * cd /caminho/projeto && /usr/bin/Rscript functions/ExportOftalmoJson.R --output data/oftalmo_snapshot.json
+```
 
 Para usar o banner oficial em imagem, basta adicionar:
 
@@ -162,7 +209,8 @@ Mais detalhes em `shapes/README.md`.
 project/
 ├── app.R
 ├── functions/
-│   └── ConectDb.R     # conexão e consulta ao MariaDB
+│   ├── ConectDb.R         # conexão e consulta ao MariaDB
+│   └── ExportOftalmoJson.R # exporta snapshot JSON para uso em cloud
 ├── R/
 │   ├── data.R         # ingestão (DB + mock), transformação e utilitários
 │   ├── ui.R           # interface

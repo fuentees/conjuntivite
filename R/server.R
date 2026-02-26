@@ -91,8 +91,12 @@ server <- function(input, output, session) {
   output$fonte_dados <- renderText({
     if (identical(dados_fonte, "database")) {
       "Fonte: Banco MariaDB"
-    } else {
+    } else if (identical(dados_fonte, "json")) {
+      "Fonte: JSON (arquivo/URL)"
+    } else if (identical(dados_fonte, "mock")) {
       "Fonte: Mock data (fallback)"
+    } else {
+      paste0("Fonte: ", as.character(dados_fonte))
     }
   })
 
