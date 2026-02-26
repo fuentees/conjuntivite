@@ -984,7 +984,7 @@ is_internal_oftalmo_dataset <- function(df) {
   all(required_cols %in% tolower(names(df)))
 }
 
-normalize_internal_oftalmo_dataset <- function(df) {
+normalize_internal_oftalmo_dataset <- function(df, aggregate = TRUE) {
   if (is.null(df) || nrow(df) == 0) {
     return(NULL)
   }
@@ -1082,27 +1082,42 @@ normalize_internal_oftalmo_dataset <- function(df) {
       coleta_material = ifelse(is.na(coleta_material), 0, pmax(round(sanitize_numeric_values(coleta_material, default = 0)), 0)),
       encaminhamentos = ifelse(is.na(encaminhamentos), 0, pmax(round(sanitize_numeric_values(encaminhamentos, default = 0)), 0))
     ) %>%
-    filter(!is.na(ano), !is.na(semana)) %>%
-    group_by(ano, semana, drs, drs_codigo, gve, gve_codigo, municipio, uvis, populacao) %>%
-    summarise(
-      casos = sum(casos, na.rm = TRUE),
-      surtos = sum(surtos, na.rm = TRUE),
-      sexo_masc = sum(sexo_masc, na.rm = TRUE),
-      sexo_fem = sum(sexo_fem, na.rm = TRUE),
-      fx_menor1 = sum(fx_menor1, na.rm = TRUE),
-      fx_1a4 = sum(fx_1a4, na.rm = TRUE),
-      fx_5a9 = sum(fx_5a9, na.rm = TRUE),
-      fx_10a14 = sum(fx_10a14, na.rm = TRUE),
-      fx_15mais = sum(fx_15mais, na.rm = TRUE),
-      acao_educativa = sum(acao_educativa, na.rm = TRUE),
-      treinamentos = sum(treinamentos, na.rm = TRUE),
-      coleta_material = sum(coleta_material, na.rm = TRUE),
-      encaminhamentos = sum(encaminhamentos, na.rm = TRUE),
-      .groups = "drop"
-    ) %>%
-    mutate(
-      incidencia = ifelse(populacao > 0, round((casos / populacao) * 100000, 2), NA_real_)
-    ) %>%
+    filter(!is.na(ano), !is.na(semana))
+
+  if (isTRUE(aggregate)) {
+    df <- df %>%
+      group_by(ano, semana, drs, drs_codigo, gve, gve_codigo, municipio, uvis, populacao) %>%
+      summarise(
+        casos = sum(casos, na.rm = TRUE),
+        surtos = sum(surtos, na.rm = TRUE),
+        sexo_masc = sum(sexo_masc, na.rm = TRUE),
+        sexo_fem = sum(sexo_fem, na.rm = TRUE),
+        fx_menor1 = sum(fx_menor1, na.rm = TRUE),
+        fx_1a4 = sum(fx_1a4, na.rm = TRUE),
+        fx_5a9 = sum(fx_5a9, na.rm = TRUE),
+        fx_10a14 = sum(fx_10a14, na.rm = TRUE),
+        fx_15mais = sum(fx_15mais, na.rm = TRUE),
+        acao_educativa = sum(acao_educativa, na.rm = TRUE),
+        treinamentos = sum(treinamentos, na.rm = TRUE),
+        coleta_material = sum(coleta_material, na.rm = TRUE),
+        encaminhamentos = sum(encaminhamentos, na.rm = TRUE),
+        .groups = "drop"
+      ) %>%
+      mutate(
+        incidencia = ifelse(populacao > 0, round((casos / populacao) * 100000, 2), NA_real_)
+      )
+  } else {
+    df <- df %>%
+      mutate(
+        incidencia = ifelse(
+          !is.finite(incidencia) | is.na(incidencia),
+          ifelse(populacao > 0, round((casos / populacao) * 100000, 2), NA_real_),
+          incidencia
+        )
+      )
+  }
+
+  df <- df %>%
     arrange(ano, semana, drs, gve, municipio, uvis)
 
   if (nrow(df) == 0) {
@@ -1168,10 +1183,27 @@ load_oftalmo_json_data <- function(json_path = "", json_url = "") {
     return(NULL)
   }
 
+  is_exported_snapshot <- is.list(payload) &&
+    !is.null(payload$schema_version) &&
+    !is.null(payload$data)
+
   prepared <- if (is_internal_oftalmo_dataset(raw_df)) {
-    normalize_internal_oftalmo_dataset(raw_df)
+    normalize_internal_oftalmo_dataset(raw_df, aggregate = !is_exported_snapshot)
   } else {
     prepare_oftalmo_dataset(raw_df)
+  }
+
+  recent_years <- suppressWarnings(as.integer(Sys.getenv("OFTALMO_JSON_RECENT_YEARS", unset = "0")))
+  if (
+    !is.null(prepared) &&
+      nrow(prepared) > 0 &&
+      is.finite(recent_years) &&
+      recent_years > 0 &&
+      "ano" %in% names(prepared)
+  ) {
+    anos_disponiveis <- sort(unique(prepared$ano), decreasing = TRUE)
+    anos_manter <- utils::head(anos_disponiveis, recent_years)
+    prepared <- prepared %>% filter(ano %in% anos_manter)
   }
 
   if (!is.null(prepared)) {

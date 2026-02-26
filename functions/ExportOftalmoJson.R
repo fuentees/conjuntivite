@@ -84,6 +84,7 @@ main <- function() {
     source = "database",
     n_records = nrow(dados),
     schema_version = 1,
+    prepared_dataset = TRUE,
     data = dados
   )
 

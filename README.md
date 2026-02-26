@@ -117,9 +117,11 @@ Configuração de fonte JSON (útil para cloud sem acesso ao banco privado):
 export OFTALMO_DATA_MODE="json"   # auto | db | json
 export OFTALMO_JSON_PATH="/caminho/oftalmo_snapshot.json"
 export OFTALMO_JSON_URL="https://seu-servidor/oftalmo_snapshot.json"
+export OFTALMO_JSON_RECENT_YEARS="8"   # opcional: limita anos mais recentes para reduzir memória
 ```
 
 > Quando `OFTALMO_DATA_MODE=json`, o app usa `OFTALMO_JSON_PATH` (se existir) e depois `OFTALMO_JSON_URL`.
+> Em ambientes com pouca memória (ex.: shinyapps.io), configure `OFTALMO_JSON_RECENT_YEARS` para reduzir consumo no startup.
 
 ## Instalação
 
