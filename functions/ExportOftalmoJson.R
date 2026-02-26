@@ -46,7 +46,6 @@ main <- function() {
   }
 
   Sys.setenv(
-    OFTALMO_ALLOW_MOCK = "false",
     OFTALMO_DATA_MODE = "db"
   )
 

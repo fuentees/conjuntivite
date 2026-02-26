@@ -401,7 +401,7 @@ ui <- tagList(
             </p>
             <ul>
               <li><strong>Filtros encadeados:</strong> Ano, DRS, GVE e Município.</li>
-              <li><strong>Dados:</strong> integração com MariaDB (com opção de fallback via variável de ambiente).</li>
+              <li><strong>Dados:</strong> integração com MariaDB e/ou JSON exportado da base oficial.</li>
               <li><strong>Análises:</strong> série temporal, canal endêmico, tendência e alerta preditivo de surtos.</li>
               <li><strong>Painel operacional:</strong> sexo, faixa etária, ações/treinamentos e tabela de municípios com alerta visual.</li>
             </ul>

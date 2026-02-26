@@ -93,8 +93,6 @@ server <- function(input, output, session) {
       "Fonte: Banco MariaDB"
     } else if (identical(dados_fonte, "json")) {
       "Fonte: JSON (arquivo/URL)"
-    } else if (identical(dados_fonte, "mock")) {
-      "Fonte: Mock data (fallback)"
     } else {
       paste0("Fonte: ", as.character(dados_fonte))
     }
@@ -177,19 +175,6 @@ server <- function(input, output, session) {
       selectize = FALSE
     )
   })
-
-  if (identical(dados_fonte, "mock")) {
-    session$onFlushed(
-      function() {
-        showNotification(
-          "Conexão com banco indisponível. Dashboard usando dados simulados.",
-          type = "warning",
-          duration = 8
-        )
-      },
-      once = TRUE
-    )
-  }
 
   observeEvent(input$filtro_ano, {
     req(input$filtro_ano)

@@ -44,12 +44,6 @@ O app pode carregar dados em 3 modos (`OFTALMO_DATA_MODE`):
 - `db`: usa somente MariaDB.
 - `json`: usa somente JSON (arquivo local ou URL).
 
-Se você quiser liberar fallback para dados simulados, configure:
-
-```bash
-export OFTALMO_ALLOW_MOCK="true"
-```
-
 ### Campos esperados da base
 
 - `DtNotificacao` (data de notificação)
@@ -58,6 +52,7 @@ export OFTALMO_ALLOW_MOCK="true"
 - `dominio_gve` (GVE)
 - `dominio_drs` (DRS, quando disponível)
 - `TotalCaso` (casos)
+- `Populacao` (população do território para cálculo de incidência)
 - `NuSurto` e/ou `Surto` (informações de surto)
 - `SexMasc` e `SexFem` (perfil por sexo)
 - `FxMenorUmAno`, `FxUmQuatro`, `FxCincoNove`, `FxDezQuatorze`, `FxQuizeOuMais` (faixa etária)
@@ -94,6 +89,7 @@ export OFTALMO_COL_DRS_CODIGO="nome_real_coluna_codigo_drs"
 export OFTALMO_COL_MUNICIPIO="nome_real_coluna_municipio"
 export OFTALMO_COL_UVIS="nome_real_coluna_uvis"
 export OFTALMO_COL_CASOS="nome_real_coluna_casos"
+export OFTALMO_COL_POPULACAO="nome_real_coluna_populacao"
 export OFTALMO_COL_DATA="nome_real_coluna_data_notificacao"
 export OFTALMO_COL_ANO="nome_real_coluna_ano"
 export OFTALMO_COL_SEMANA="nome_real_coluna_semana_epidemiologica"
@@ -122,6 +118,7 @@ export OFTALMO_JSON_RECENT_YEARS="8"   # opcional: limita anos mais recentes par
 
 > Quando `OFTALMO_DATA_MODE=json`, o app usa `OFTALMO_JSON_PATH` (se existir) e depois `OFTALMO_JSON_URL`.
 > Em ambientes com pouca memória (ex.: shinyapps.io), configure `OFTALMO_JSON_RECENT_YEARS` para reduzir consumo no startup.
+> Se DB/JSON não estiverem acessíveis, o app interrompe a inicialização (não há fallback com dados fictícios).
 
 ## Instalação
 
@@ -135,7 +132,7 @@ shiny::runApp(".")
 ```
 
 > `geobr` e `sf` são recomendados para coroplético com polígonos.
-> Sem eles, o mapa funciona em modo fallback com marcadores.
+> Sem eles, o mapa funciona em modo de marcadores (sem polígonos).
 
 ## Fluxo recomendado para shinyapps.io (banco privado)
 
@@ -214,7 +211,7 @@ project/
 │   ├── ConectDb.R         # conexão e consulta ao MariaDB
 │   └── ExportOftalmoJson.R # exporta snapshot JSON para uso em cloud
 ├── R/
-│   ├── data.R         # ingestão (DB + mock), transformação e utilitários
+│   ├── data.R         # ingestão (DB/JSON), transformação e utilitários
 │   ├── ui.R           # interface
 │   └── server.R       # reatividade, indicadores e gráficos
 ├── shapes/

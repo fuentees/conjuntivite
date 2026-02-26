@@ -9,69 +9,6 @@ if (file.exists("functions/ConectDb.R")) {
   )
 }
 
-set.seed(42)
-
-drs_list <- c(
-  "DRS Ribeirão Preto",
-  "DRS Campinas",
-  "DRS São Paulo",
-  "DRS Bauru",
-  "DRS Araçatuba"
-)
-
-drs_gve_mapping <- list(
-  "DRS Ribeirão Preto" = c("GVE Ribeirão Preto", "GVE Araraquara", "GVE São Carlos"),
-  "DRS Campinas" = c("GVE Campinas", "GVE Piracicaba", "GVE Sorocaba"),
-  "DRS São Paulo" = c("GVE Santo Amaro", "GVE Vila Mariana", "GVE Pinheiros"),
-  "DRS Bauru" = c("GVE Bauru", "GVE Avaré", "GVE Jaú"),
-  "DRS Araçatuba" = c("GVE Araçatuba", "GVE Birigui", "GVE Andradina")
-)
-
-gve_municipio_mapping <- list(
-  "GVE Ribeirão Preto" = c("Ribeirão Preto", "Cravinhos", "Serrana"),
-  "GVE Araraquara" = c("Araraquara", "Boa Esperança", "Matão"),
-  "GVE São Carlos" = c("São Carlos", "Ibaté", "Brotas"),
-  "GVE Campinas" = c("Campinas", "Valinhos", "Vinhedo"),
-  "GVE Piracicaba" = c("Piracicaba", "Santa Maria da Serra", "Limeira"),
-  "GVE Sorocaba" = c("Sorocaba", "Salto", "Boituva"),
-  "GVE Santo Amaro" = c("São Paulo", "Santo André", "São Bernardo"),
-  "GVE Vila Mariana" = c("São Paulo", "Taboão da Serra", "Embu-Guaçu"),
-  "GVE Pinheiros" = c("São Paulo", "Osasco", "Diadema"),
-  "GVE Bauru" = c("Bauru", "Agudos", "Pederneiras"),
-  "GVE Avaré" = c("Avaré", "Arandu", "Itatinga"),
-  "GVE Jaú" = c("Jaú", "Mineiros do Tietê", "Barra Bonita"),
-  "GVE Araçatuba" = c("Araçatuba", "Castilho", "Guzolândia"),
-  "GVE Birigui" = c("Birigui", "Penápolis", "Luiziânia"),
-  "GVE Andradina" = c("Andradina", "Lavínia", "Murutinga do Sul")
-)
-
-known_gves <- unlist(drs_gve_mapping, use.names = FALSE)
-gve_drs_lookup <- setNames(rep(names(drs_gve_mapping), lengths(drs_gve_mapping)), known_gves)
-known_drs <- unique(names(drs_gve_mapping))
-
-municipio_populacao <- c(
-  "São Paulo" = 11451999,
-  "Campinas" = 1207609,
-  "Ribeirão Preto" = 720116,
-  "Sorocaba" = 723574,
-  "Santo André" = 748919,
-  "São Bernardo" = 849874,
-  "Osasco" = 742593,
-  "Piracicaba" = 429905,
-  "Bauru" = 381416,
-  "Araçatuba" = 198129,
-  "Araraquara" = 242228,
-  "São Carlos" = 256915,
-  "Limeira" = 310783,
-  "Jaú" = 151881,
-  "Andradina" = 58000,
-  "Birigui" = 124883,
-  "Diadema" = 429550,
-  "Taboão da Serra" = 293652,
-  "Valinhos" = 131210,
-  "Vinhedo" = 82240
-)
-
 normalize_key <- function(x) {
   x <- trimws(as.character(x))
   x <- ifelse(is.na(x), "", x)
@@ -80,10 +17,6 @@ normalize_key <- function(x) {
   trimws(x)
 }
 
-known_gve_lookup <- setNames(known_gves, normalize_key(known_gves))
-known_drs_lookup <- setNames(known_drs, normalize_key(known_drs))
-known_municipios <- unique(unlist(gve_municipio_mapping, use.names = FALSE))
-known_municipio_lookup <- setNames(known_municipios, normalize_key(known_municipios))
 
 pick_existing_column <- function(df, candidates) {
   cols <- names(df)
@@ -218,84 +151,32 @@ infer_drs_from_gve_text <- function(gve_values) {
 
 standardize_gve <- function(gve_raw) {
   gve_raw <- as.character(gve_raw)
-  key <- normalize_key(gve_raw)
-
-  result <- known_gve_lookup[key]
-  result <- as.character(result)
-
-  missing <- is.na(result) | result == ""
-  if (any(missing)) {
-    fallback <- trimws(gve_raw[missing])
-    fallback[fallback == "" | is.na(fallback)] <- "Não informado"
-    needs_prefix <- !grepl("^gve\\b", tolower(fallback))
-    fallback[needs_prefix] <- paste("GVE", fallback[needs_prefix])
-    result[missing] <- fallback
-  }
-
+  result <- trimws(gve_raw)
+  result[result == "" | is.na(result)] <- "Não informado"
+  needs_prefix <- !grepl("^gve\\b", tolower(result)) & result != "Não informado"
+  result[needs_prefix] <- paste("GVE", result[needs_prefix])
   result
 }
 
 standardize_drs <- function(drs_raw) {
   drs_raw <- as.character(drs_raw)
-  key <- normalize_key(drs_raw)
-
-  result <- known_drs_lookup[key]
-  result <- as.character(result)
-
-  missing <- is.na(result) | result == ""
-  if (any(missing)) {
-    fallback <- trimws(drs_raw[missing])
-    fallback[fallback == "" | is.na(fallback)] <- "Não informado"
-    needs_prefix <- !grepl("^drs\\b", tolower(fallback))
-    fallback[needs_prefix] <- paste("DRS", fallback[needs_prefix])
-    result[missing] <- fallback
-  }
-
+  result <- trimws(drs_raw)
+  result[result == "" | is.na(result)] <- "Não informado"
+  needs_prefix <- !grepl("^drs\\b", tolower(result)) & result != "Não informado"
+  result[needs_prefix] <- paste("DRS", result[needs_prefix])
   result
 }
 
 standardize_municipio <- function(municipio_raw) {
   municipio_raw <- as.character(municipio_raw)
-  key <- normalize_key(municipio_raw)
-
-  result <- known_municipio_lookup[key]
-  result <- as.character(result)
-
-  missing <- is.na(result) | result == ""
-  if (any(missing)) {
-    result[missing] <- title_case_safe(municipio_raw[missing])
-  }
-
-  result
-}
-
-infer_population <- function(municipios) {
-  municipios <- as.character(municipios)
-  pop <- municipio_populacao[municipios]
-  pop <- as.numeric(pop)
-
-  missing <- is.na(pop) | pop <= 0
-  if (any(missing)) {
-    hash_base <- vapply(
-      municipios[missing],
-      function(x) sum(utf8ToInt(enc2utf8(x))),
-      numeric(1)
-    )
-    pop[missing] <- as.numeric(80000 + (hash_base %% 420000))
-  }
-
-  round(pop)
+  title_case_safe(municipio_raw)
 }
 
 map_drs_from_gve <- function(gve, drs_raw = NULL) {
-  gve <- as.character(gve)
-  drs_from_gve <- unname(gve_drs_lookup[gve])
-
+  drs_from_gve <- rep(NA_character_, length(as.character(gve)))
   if (!is.null(drs_raw)) {
-    drs_raw <- as.character(drs_raw)
-    drs_raw <- trimws(drs_raw)
-    drs_raw[drs_raw == ""] <- NA_character_
-    drs_from_gve[is.na(drs_from_gve)] <- drs_raw[is.na(drs_from_gve)]
+    drs_from_gve <- trimws(as.character(drs_raw))
+    drs_from_gve[drs_from_gve == ""] <- NA_character_
   }
 
   drs_from_gve[is.na(drs_from_gve)] <- "DRS Não informado"
@@ -684,6 +565,12 @@ prepare_oftalmo_dataset <- function(raw_data) {
     candidates = c("TotalCaso", "total_caso", "casos", "totalcaso"),
     regex_candidates = c("total.*caso", "\\bcasos\\b", "qtd.*cas")
   )
+  populacao_col <- pick_column_with_override(
+    raw_data,
+    override_env_var = "OFTALMO_COL_POPULACAO",
+    candidates = c("Populacao", "populacao", "pop", "population", "Pop"),
+    regex_candidates = c("popul")
+  )
   surto_col <- pick_column_with_override(
     raw_data,
     override_env_var = "OFTALMO_COL_NU_SURTO",
@@ -806,6 +693,7 @@ prepare_oftalmo_dataset <- function(raw_data) {
       ),
       casos = sanitize_numeric_values(.data[[casos_col]], default = 0),
       casos = ifelse(is.na(casos), 0, pmax(round(casos), 0)),
+      populacao = if (!is.null(populacao_col)) sanitize_numeric_values(.data[[populacao_col]], default = NA_real_) else NA_real_,
       surto_n = if (!is.null(surto_col)) sanitize_numeric_values(.data[[surto_col]], default = 0) else 0,
       surto_n = ifelse(is.na(surto_n), 0, pmax(round(surto_n), 0)),
       surto_flag = if (!is.null(surto_flag_col)) {
@@ -837,7 +725,7 @@ prepare_oftalmo_dataset <- function(raw_data) {
       ano = dplyr::coalesce(ano_registro, year(data_notificacao)),
       semana = dplyr::coalesce(semana_registro, isoweek(data_notificacao)),
       semana = pmin(pmax(semana, 1), 53),
-      populacao = infer_population(municipio),
+      populacao = ifelse(!is.finite(populacao) | populacao <= 0, NA_real_, populacao),
       surtos = surto_n + surto_flag,
       sexo_masc = ifelse(is.na(sexo_masc), 0, pmax(round(sexo_masc), 0)),
       sexo_fem = ifelse(is.na(sexo_fem), 0, pmax(round(sexo_fem), 0)),
@@ -879,95 +767,6 @@ prepare_oftalmo_dataset <- function(raw_data) {
   }
 
   df
-}
-
-generate_mock_data <- function() {
-  uvis_pool <- c(
-    "UVIS Sé",
-    "UVIS Mooca",
-    "UVIS Butantã",
-    "UVIS Lapa/Pinheiros",
-    "UVIS Vila Mariana/Jabaquara",
-    "UVIS Freguesia do Ó/Brasilândia",
-    "UVIS Penha",
-    "UVIS Santana/Tucuruvi/Jaçanã/Tremembé",
-    "UVIS Ermelino Matarazzo/São Miguel",
-    "UVIS Cidade Tiradentes/Guaianases"
-  )
-
-  combinacoes <- lapply(names(drs_gve_mapping), function(drs_atual) {
-    gves <- drs_gve_mapping[[drs_atual]]
-
-    bind_rows(lapply(gves, function(gve_atual) {
-      tibble::tibble(
-        drs = drs_atual,
-        gve = gve_atual,
-        municipio = gve_municipio_mapping[[gve_atual]]
-      )
-    }))
-  }) %>%
-    bind_rows()
-
-  gve_code_lookup <- setNames(
-    as.character(seq_along(unique(known_gves))),
-    unique(known_gves)
-  )
-  drs_code_lookup <- setNames(
-    as.character(seq_along(unique(names(drs_gve_mapping)))),
-    unique(names(drs_gve_mapping))
-  )
-
-  anos <- 2022:year(Sys.Date())
-  semanas <- 1:52
-
-  dados <- expand_grid(
-    ano = anos,
-    semana = semanas
-  ) %>%
-    crossing(combinacoes) %>%
-    mutate(
-      ciclo_sazonal = 6 * sin((2 * pi * semana) / 52) + 8 * exp(-((semana - 10)^2) / 70),
-      tendencia = (ano - min(anos)) * 1.1,
-      ruido = rnorm(n(), mean = 0, sd = 2.5),
-      lambda = pmax(1.5, 4 + ciclo_sazonal + tendencia + ruido),
-      casos = rpois(n(), lambda = lambda),
-      populacao = infer_population(municipio),
-      gve_codigo = unname(gve_code_lookup[gve]),
-      drs_codigo = unname(drs_code_lookup[drs]),
-      surtos = ifelse(casos > quantile(casos, 0.9, na.rm = TRUE), 1, 0),
-      prop_masc = runif(n(), min = 0.44, max = 0.56),
-      sexo_masc = pmax(round(casos * prop_masc), 0),
-      sexo_fem = pmax(casos - sexo_masc, 0),
-      p_fx_menor1 = runif(n(), 0.03, 0.09),
-      p_fx_1a4 = runif(n(), 0.18, 0.28),
-      p_fx_5a9 = runif(n(), 0.18, 0.27),
-      p_fx_10a14 = runif(n(), 0.14, 0.22),
-      p_fx_15mais = runif(n(), 0.28, 0.40),
-      p_fx_total = p_fx_menor1 + p_fx_1a4 + p_fx_5a9 + p_fx_10a14 + p_fx_15mais,
-      fx_menor1 = pmax(round(casos * (p_fx_menor1 / p_fx_total)), 0),
-      fx_1a4 = pmax(round(casos * (p_fx_1a4 / p_fx_total)), 0),
-      fx_5a9 = pmax(round(casos * (p_fx_5a9 / p_fx_total)), 0),
-      fx_10a14 = pmax(round(casos * (p_fx_10a14 / p_fx_total)), 0),
-      fx_15mais = pmax(casos - fx_menor1 - fx_1a4 - fx_5a9 - fx_10a14, 0),
-      acao_educativa = rpois(n(), lambda = pmax(casos / 30, 0.2)),
-      treinamentos = rpois(n(), lambda = pmax(casos / 45, 0.1)),
-      coleta_material = rpois(n(), lambda = pmax(casos / 50, 0.1)),
-      encaminhamentos = rpois(n(), lambda = pmax(casos / 35, 0.1)),
-      uvis = ifelse(
-        normalize_key(municipio) == "sao paulo",
-        sample(uvis_pool, n(), replace = TRUE),
-        NA_character_
-      ),
-      incidencia = round((casos / populacao) * 100000, 2)
-    ) %>%
-    select(
-      ano, semana, drs, drs_codigo, gve, gve_codigo, municipio, uvis, casos, populacao, incidencia, surtos,
-      sexo_masc, sexo_fem, fx_menor1, fx_1a4, fx_5a9, fx_10a14, fx_15mais,
-      acao_educativa, treinamentos, coleta_material, encaminhamentos
-    ) %>%
-    arrange(ano, semana, drs, gve, municipio, uvis)
-
-  dados
 }
 
 ensure_json_dependency <- function() {
@@ -1068,7 +867,7 @@ normalize_internal_oftalmo_dataset <- function(df, aggregate = TRUE) {
       uvis = ifelse(normalize_key(municipio) == "sao paulo", uvis, NA_character_),
       casos = ifelse(is.na(casos), 0, pmax(round(sanitize_numeric_values(casos, default = 0)), 0)),
       populacao = sanitize_numeric_values(populacao, default = NA_real_),
-      populacao = ifelse(is.na(populacao) | !is.finite(populacao) | populacao <= 0, infer_population(municipio), populacao),
+      populacao = ifelse(is.na(populacao) | !is.finite(populacao) | populacao <= 0, NA_real_, populacao),
       surtos = ifelse(is.na(surtos), 0, pmax(round(sanitize_numeric_values(surtos, default = 0)), 0)),
       sexo_masc = ifelse(is.na(sexo_masc), 0, pmax(round(sanitize_numeric_values(sexo_masc, default = 0)), 0)),
       sexo_fem = ifelse(is.na(sexo_fem), 0, pmax(round(sanitize_numeric_values(sexo_fem, default = 0)), 0)),
@@ -1218,8 +1017,7 @@ load_epidemiological_data <- function(
   prefer_json = FALSE,
   enable_json = TRUE,
   json_path = "",
-  json_url = "",
-  allow_mock_fallback = FALSE
+  json_url = ""
 ) {
   db_error <- NULL
   db_empty <- FALSE
@@ -1302,54 +1100,47 @@ load_epidemiological_data <- function(
     }
   }
 
-  if (!allow_mock_fallback) {
-    reasons <- character()
+  reasons <- character()
 
-    if (prefer_db) {
-      db_reason <- if (!is.null(db_error)) {
-        paste("Banco: erro na conexão/consulta -", db_error)
-      } else if (db_empty) {
-        "Banco: consulta executada, mas sem dados válidos para o painel."
-      } else if (!exists("load_oftalmo_raw_data", mode = "function")) {
-        "Banco: função load_oftalmo_raw_data não encontrada."
-      } else {
-        "Banco: sem retorno de dados."
-      }
-      reasons <- c(reasons, db_reason)
+  if (prefer_db) {
+    db_reason <- if (!is.null(db_error)) {
+      paste("Banco: erro na conexão/consulta -", db_error)
+    } else if (db_empty) {
+      "Banco: consulta executada, mas sem dados válidos para o painel."
+    } else if (!exists("load_oftalmo_raw_data", mode = "function")) {
+      "Banco: função load_oftalmo_raw_data não encontrada."
+    } else {
+      "Banco: sem retorno de dados."
     }
-
-    if (enable_json) {
-      json_reason <- if (!has_json_source) {
-        "JSON: OFTALMO_JSON_PATH/OFTALMO_JSON_URL não configurados."
-      } else if (!is.null(json_error)) {
-        paste("JSON: erro na leitura/processamento -", json_error)
-      } else if (json_empty) {
-        "JSON: arquivo/url lido, mas sem dados válidos para o painel."
-      } else {
-        "JSON: sem retorno de dados."
-      }
-      reasons <- c(reasons, json_reason)
-    }
-
-    if (length(reasons) == 0) {
-      reasons <- "Nenhuma fonte de dados foi habilitada (DB/JSON)."
-    }
-
-    stop(
-      paste(
-        "Não foi possível carregar dados para o painel.",
-        paste(reasons, collapse = " "),
-        "Como OFTALMO_ALLOW_MOCK está desativado, o app não usará dados simulados."
-      )
-    )
+    reasons <- c(reasons, db_reason)
   }
 
-  mock_data <- generate_mock_data()
-  attr(mock_data, "data_source") <- "mock"
-  mock_data
+  if (enable_json) {
+    json_reason <- if (!has_json_source) {
+      "JSON: OFTALMO_JSON_PATH/OFTALMO_JSON_URL não configurados."
+    } else if (!is.null(json_error)) {
+      paste("JSON: erro na leitura/processamento -", json_error)
+    } else if (json_empty) {
+      "JSON: arquivo/url lido, mas sem dados válidos para o painel."
+    } else {
+      "JSON: sem retorno de dados."
+    }
+    reasons <- c(reasons, json_reason)
+  }
+
+  if (length(reasons) == 0) {
+    reasons <- "Nenhuma fonte de dados foi habilitada (DB/JSON)."
+  }
+
+  stop(
+    paste(
+      "Não foi possível carregar dados para o painel.",
+      paste(reasons, collapse = " "),
+      "Não há fallback para dados fictícios."
+    )
+  )
 }
 
-allow_mock_fallback <- tolower(Sys.getenv("OFTALMO_ALLOW_MOCK", unset = "false")) %in% c("1", "true", "sim", "yes")
 data_mode <- tolower(trimws(Sys.getenv("OFTALMO_DATA_MODE", unset = "auto")))
 if (!(data_mode %in% c("auto", "db", "json"))) {
   data_mode <- "auto"
@@ -1363,8 +1154,7 @@ dados_epidemiologicos <- load_epidemiological_data(
   prefer_json = data_mode == "json",
   enable_json = data_mode %in% c("auto", "json"),
   json_path = json_path,
-  json_url = json_url,
-  allow_mock_fallback = allow_mock_fallback
+  json_url = json_url
 )
 dados_fonte <- attr(dados_epidemiologicos, "data_source")
 if (is.null(dados_fonte) || dados_fonte == "") {
@@ -1386,41 +1176,58 @@ get_municipios_by_gve <- function(gve) {
 }
 
 get_municipio_coords <- function(municipios) {
-  coords_known <- data.frame(
-    municipio = c(
-      "Ribeirão Preto", "Araraquara", "São Carlos", "Campinas", "Piracicaba",
-      "Sorocaba", "São Paulo", "Santo André", "São Bernardo", "Bauru", "Jaú",
-      "Araçatuba", "Birigui", "Andradina", "Cravinhos", "Limeira", "Valinhos", "Vinhedo"
-    ),
-    lat = c(
-      -21.1775, -21.7947, -22.0174, -22.9056, -22.7253,
-      -23.5015, -23.5505, -23.6578, -23.6914, -22.3145, -22.2936,
-      -21.2069, -21.2885, -20.8960, -21.3408, -22.5645, -22.9698, -23.0296
-    ),
-    lng = c(
-      -47.8103, -48.1756, -47.8860, -47.0608, -47.6492,
-      -47.4526, -46.6333, -46.5333, -46.5655, -49.0587, -48.5592,
-      -50.4328, -50.3408, -51.3790, -47.7290, -47.4004, -46.9956, -46.9755
-    ),
-    stringsAsFactors = FALSE
-  )
-
   base <- data.frame(municipio = unique(as.character(municipios)), stringsAsFactors = FALSE)
-  coords <- base %>% left_join(coords_known, by = "municipio")
-
-  missing <- is.na(coords$lat) | is.na(coords$lng)
-  if (any(missing)) {
-    hash <- vapply(
-      coords$municipio[missing],
-      function(x) sum(utf8ToInt(enc2utf8(x))),
-      numeric(1)
+  coords <- base %>%
+    mutate(
+      lat = NA_real_,
+      lng = NA_real_
     )
 
-    coords$lat[missing] <- -22.3 + ((hash %% 220) - 110) / 100
-    coords$lng[missing] <- -48.2 + (((hash * 7) %% 240) - 120) / 100
+  if (!requireNamespace("geobr", quietly = TRUE) || !requireNamespace("sf", quietly = TRUE)) {
+    return(coords)
   }
 
-  coords
+  muni_sf <- tryCatch(
+    geobr::read_municipality(
+      code_muni = "SP",
+      year = 2020,
+      simplified = TRUE,
+      showProgress = FALSE
+    ),
+    error = function(e) NULL
+  )
+
+  if (is.null(muni_sf) || nrow(muni_sf) == 0) {
+    return(coords)
+  }
+
+  centroids <- tryCatch(
+    sf::st_point_on_surface(muni_sf),
+    error = function(e) NULL
+  )
+
+  if (is.null(centroids)) {
+    return(coords)
+  }
+
+  xy <- sf::st_coordinates(centroids)
+  geobr_coords <- muni_sf %>%
+    mutate(
+      municipio_norm = normalize_key(name_muni),
+      lat = as.numeric(xy[, "Y"]),
+      lng = as.numeric(xy[, "X"])
+    ) %>%
+    sf::st_drop_geometry() %>%
+    select(municipio_norm, lat, lng)
+
+  coords %>%
+    mutate(municipio_norm = normalize_key(municipio)) %>%
+    left_join(geobr_coords, by = "municipio_norm", suffix = c("", "_geobr")) %>%
+    transmute(
+      municipio,
+      lat = lat_geobr,
+      lng = lng_geobr
+    )
 }
 
 get_sp_municipality_shapes <- local({
