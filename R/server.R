@@ -504,30 +504,48 @@ server <- function(input, output, session) {
   })
 
   output$grafico_serie_temporal <- renderPlotly({
-    serie <- serie_semanal_atual()
+    serie <- serie_semanal_atual() %>%
+      arrange(semana)
 
     if (nrow(serie) == 0) {
       return(empty_plotly("Sem dados para os filtros selecionados"))
     }
 
-    media <- mean(serie$casos, na.rm = TRUE)
+    semana_limite <- suppressWarnings(max(serie$semana[serie$casos > 0], na.rm = TRUE))
+    if (!is.finite(semana_limite)) {
+      semana_limite <- suppressWarnings(max(serie$semana, na.rm = TRUE))
+    }
+    if (!is.finite(semana_limite)) {
+      semana_limite <- 53
+    }
+
+    serie_plot <- serie %>%
+      mutate(
+        casos_plot = ifelse(semana <= semana_limite, casos, NA_real_)
+      ) %>%
+      mutate(
+        media_movel_4s = roll_mean(casos_plot, k = 4),
+        media_movel_4s = ifelse(semana <= semana_limite, media_movel_4s, NA_real_)
+      )
 
     plot_ly(
-      serie,
+      serie_plot,
       x = ~semana,
-      y = ~casos,
+      y = ~casos_plot,
       type = "bar",
       name = "Casos por semana",
       marker = list(color = "#1976d2", opacity = 0.9),
       hovertemplate = "Semana %{x}<br>Casos: %{y}<extra></extra>"
     ) %>%
       add_trace(
+        data = serie_plot,
         x = ~semana,
-        y = media,
+        y = ~media_movel_4s,
         type = "scatter",
         mode = "lines",
-        name = "CL (média)",
-        line = list(color = "#455a64", dash = "dash", width = 2)
+        name = "Média móvel (4 semanas)",
+        line = list(color = "#ef6c00", width = 2.4),
+        hovertemplate = "Semana %{x}<br>Média móvel 4s: %{y:.1f}<extra></extra>"
       ) %>%
       layout(
         hovermode = "x unified",
@@ -545,7 +563,7 @@ server <- function(input, output, session) {
             yref = "paper",
             xanchor = "left",
             yanchor = "bottom",
-            text = "Base histórica do canal endêmico: exclui 2011",
+            text = "Linha laranja: média móvel de 4 semanas. Semanas futuras sem notificação ficam ocultas.",
             showarrow = FALSE,
             font = list(size = 11, color = "#52606d")
           )
