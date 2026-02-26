@@ -12,7 +12,7 @@ Aplicativo Shiny para monitoramento semanal de conjuntivites com interface moder
   - Número de surtos notificados (conforme filtros ativos)
   - Situação epidemiológica (Normal / Alerta / Epidemia)
 - Gráficos interativos (plotly):
-  1. Série temporal por semana epidemiológica (barras + média móvel de 4 semanas)
+  1. Série temporal por semana epidemiológica (barras + média móvel contínua de 4 semanas)
   2. Canal endêmico (média histórica + limites + ano selecionado, com referência sem 2011)
   3. Casos por GVE
   4. Modelo de tendência semanal com projeção curta

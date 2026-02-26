@@ -504,7 +504,19 @@ server <- function(input, output, session) {
   })
 
   output$grafico_serie_temporal <- renderPlotly({
-    serie <- serie_semanal_atual() %>%
+    ano_ref <- selected_year()
+    serie_contexto <- dados_filtrados_dimensoes() %>%
+      group_by(ano, semana) %>%
+      summarise(casos = sum(casos, na.rm = TRUE), .groups = "drop")
+
+    serie <- tibble::tibble(semana = 1:53) %>%
+      left_join(
+        serie_contexto %>%
+          filter(ano == ano_ref) %>%
+          select(semana, casos),
+        by = "semana"
+      ) %>%
+      mutate(casos = tidyr::replace_na(casos, 0)) %>%
       arrange(semana)
 
     if (nrow(serie) == 0) {
@@ -519,12 +531,41 @@ server <- function(input, output, session) {
       semana_limite <- 53
     }
 
+    anos_anteriores <- sort(unique(serie_contexto$ano[serie_contexto$ano < ano_ref]), decreasing = TRUE)
+    cauda_ano_anterior <- numeric()
+    if (length(anos_anteriores) > 0) {
+      serie_ano_anterior <- tibble::tibble(semana = 1:53) %>%
+        left_join(
+          serie_contexto %>%
+            filter(ano == anos_anteriores[1]) %>%
+            select(semana, casos),
+          by = "semana"
+        ) %>%
+        mutate(casos = tidyr::replace_na(casos, 0)) %>%
+        arrange(semana)
+
+      semana_limite_prev <- suppressWarnings(max(serie_ano_anterior$semana[serie_ano_anterior$casos > 0], na.rm = TRUE))
+      if (is.finite(semana_limite_prev)) {
+        serie_ano_anterior <- serie_ano_anterior %>% filter(semana <= semana_limite_prev)
+      }
+
+      cauda_ano_anterior <- utils::tail(serie_ano_anterior$casos, 3)
+    }
+
+    if (length(cauda_ano_anterior) < 3) {
+      cauda_ano_anterior <- c(rep(0, 3 - length(cauda_ano_anterior)), cauda_ano_anterior)
+    }
+
+    casos_base_mm <- c(cauda_ano_anterior, serie$casos)
+    media_movel_continua <- roll_mean(casos_base_mm, k = 4)
+    media_movel_atual <- media_movel_continua[(length(cauda_ano_anterior) + 1):length(media_movel_continua)]
+
     serie_plot <- serie %>%
       mutate(
         casos_plot = ifelse(semana <= semana_limite, casos, NA_real_)
       ) %>%
       mutate(
-        media_movel_4s = roll_mean(casos_plot, k = 4),
+        media_movel_4s = media_movel_atual,
         media_movel_4s = ifelse(semana <= semana_limite, media_movel_4s, NA_real_)
       )
 
@@ -563,7 +604,7 @@ server <- function(input, output, session) {
             yref = "paper",
             xanchor = "left",
             yanchor = "bottom",
-            text = "Linha laranja: média móvel de 4 semanas. Semanas futuras sem notificação ficam ocultas.",
+            text = "Linha laranja: média móvel contínua de 4 semanas (usa semanas finais do ano anterior quando disponível).",
             showarrow = FALSE,
             font = list(size = 11, color = "#52606d")
           )
