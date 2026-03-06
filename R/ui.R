@@ -321,30 +321,13 @@ ui <- tagList(
         ),
         br(),
         layout_columns(
-          col_widths = c(12),
-          card(
-            class = "custom-card",
-            card_header(textOutput("titulo_grafico_unidade_saude", inline = TRUE)),
-            plotlyOutput("grafico_unidade_saude", height = "340px"),
-            tags$small(
-              class = "legend-note d-block mt-2",
-              "Visual exibido quando um município específico é selecionado. Mostra as unidades com maior carga de casos no recorte atual."
-            ),
-            full_screen = TRUE
-          )
-        ),
-        br(),
-        layout_columns(
           col_widths = c(7, 5),
           card(
             class = "custom-card",
-            card_header("Tabela operacional por município (alerta por incidência das últimas 4 semanas)"),
+            card_header(textOutput("titulo_tabela_operacional", inline = TRUE)),
             card_body(
               DT::DTOutput("tabela_municipios"),
-              tags$small(
-                class = "legend-note d-block mt-2",
-                HTML("<strong>Legenda tabela:</strong> vermelho = alerta (surto notificado ou incidência 4 semanas elevada); verde = estável. INCID_4S orienta ação rápida; INCID_ANUAL mostra acumulado.")
-              )
+              uiOutput("legenda_tabela_operacional")
             ),
             full_screen = TRUE
           ),

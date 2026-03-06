@@ -233,6 +233,10 @@ server <- function(input, output, session) {
       normalize_key(input$filtro_municipio) == "sao paulo"
   })
 
+  is_municipio_selected <- reactive({
+    !is.null(input$filtro_municipio) && input$filtro_municipio != "Todos"
+  })
+
   uvis_choices_for_context <- reactive({
     if (!is_sao_paulo_selected()) {
       return(character())
@@ -778,7 +782,9 @@ server <- function(input, output, session) {
   })
 
   output$titulo_grafico_casos_territorio <- renderText({
-    if (!is.null(input$filtro_gve) && input$filtro_gve != "Todas") {
+    if (is_municipio_selected()) {
+      paste0("Total de casos por unidade de saúde — ", input$filtro_municipio)
+    } else if (!is.null(input$filtro_gve) && input$filtro_gve != "Todas") {
       paste0("Total de casos por município — ", input$filtro_gve)
     } else {
       "Total de casos por GVE"
@@ -787,9 +793,33 @@ server <- function(input, output, session) {
 
   output$grafico_casos_gve <- renderPlotly({
     df_base <- dados_contexto_periodo()
+    municipio_especifico <- is_municipio_selected()
     gve_especifico <- !is.null(input$filtro_gve) && input$filtro_gve != "Todas"
 
-    if (gve_especifico) {
+    if (municipio_especifico) {
+      df <- df_base %>%
+        mutate(
+          unidade_saude = ifelse(
+            is.na(unidade_saude) | trimws(unidade_saude) == "",
+            "Não informado",
+            unidade_saude
+          )
+        ) %>%
+        group_by(unidade_saude) %>%
+        summarise(
+          casos = sum(casos, na.rm = TRUE),
+          surtos = sum(surtos, na.rm = TRUE),
+          .groups = "drop"
+        ) %>%
+        mutate(categoria = unidade_saude) %>%
+        arrange(desc(casos), desc(surtos))
+
+      msg_empty <- "Sem dados por unidade de saúde para os filtros selecionados"
+      x_title <- "Casos"
+      y_title <- "Unidade de saúde"
+      trace_name <- "Casos por unidade"
+      plot_horizontal <- TRUE
+    } else if (gve_especifico) {
       df <- df_base %>%
         group_by(municipio) %>%
         summarise(casos = sum(casos, na.rm = TRUE), .groups = "drop") %>%
@@ -798,7 +828,9 @@ server <- function(input, output, session) {
 
       msg_empty <- "Sem dados por município para os filtros selecionados"
       x_title <- "Município"
+      y_title <- "Casos"
       trace_name <- "Casos por município"
+      plot_horizontal <- FALSE
     } else {
       df <- df_base %>%
         group_by(gve) %>%
@@ -808,11 +840,40 @@ server <- function(input, output, session) {
 
       msg_empty <- "Sem dados por GVE para os filtros selecionados"
       x_title <- "GVE"
+      y_title <- "Casos"
       trace_name <- "Casos por GVE"
+      plot_horizontal <- FALSE
     }
 
     if (nrow(df) == 0) {
       return(empty_plotly(msg_empty))
+    }
+
+    if (plot_horizontal) {
+      top_n <- min(20, nrow(df))
+      df_plot <- utils::head(df, top_n)
+
+      return(
+        plot_ly(
+          df_plot,
+          x = ~casos,
+          y = ~reorder(categoria, casos),
+          type = "bar",
+          orientation = "h",
+          marker = list(color = "#005ca9", opacity = 0.9),
+          name = trace_name,
+          hovertemplate = "Unidade: %{y}<br>Casos: %{x}<br>Surtos: %{customdata}<extra></extra>",
+          customdata = ~surtos
+        ) %>%
+          layout(
+            showlegend = FALSE,
+            margin = list(l = 230, r = 20, t = 10, b = 45),
+            plot_bgcolor = "rgba(245,245,245,0.5)",
+            paper_bgcolor = "white",
+            xaxis = list(title = x_title, showgrid = TRUE, gridcolor = "#e5e7eb"),
+            yaxis = list(title = y_title, showgrid = FALSE)
+          )
+      )
     }
 
     plot_ly(
@@ -830,77 +891,32 @@ server <- function(input, output, session) {
         plot_bgcolor = "rgba(245,245,245,0.5)",
         paper_bgcolor = "white",
         xaxis = list(title = x_title, tickangle = 35, showgrid = FALSE),
-        yaxis = list(title = "Casos", showgrid = TRUE, gridcolor = "#e5e7eb")
+        yaxis = list(title = y_title, showgrid = TRUE, gridcolor = "#e5e7eb")
       )
   })
 
-  output$titulo_grafico_unidade_saude <- renderText({
-    if (!is.null(input$filtro_municipio) && input$filtro_municipio != "Todos") {
-      paste0("Unidades de saúde com mais casos — ", input$filtro_municipio)
+  output$titulo_tabela_operacional <- renderText({
+    if (is_municipio_selected()) {
+      paste0("Tabela operacional por unidade de saúde — ", input$filtro_municipio)
     } else {
-      "Unidades de saúde (selecione um município)"
+      "Tabela operacional por município (alerta por incidência das últimas 4 semanas)"
     }
   })
 
-  resumo_unidade_saude <- reactive({
-    if (is.null(input$filtro_municipio) || input$filtro_municipio == "Todos") {
-      return(tibble::tibble())
-    }
-
-    dados_contexto_periodo() %>%
-      group_by(unidade_saude) %>%
-      summarise(
-        casos = sum(casos, na.rm = TRUE),
-        surtos = sum(surtos, na.rm = TRUE),
-        semanas_com_registro = sum(casos > 0, na.rm = TRUE),
-        .groups = "drop"
-      ) %>%
-      mutate(
-        unidade_saude = ifelse(
-          is.na(unidade_saude) | trimws(unidade_saude) == "",
-          "Não informado",
-          unidade_saude
+  output$legenda_tabela_operacional <- renderUI({
+    if (is_municipio_selected()) {
+      return(
+        tags$small(
+          class = "legend-note d-block mt-2",
+          HTML("<strong>Legenda tabela (unidade):</strong> vermelho = alerta (surto notificado ou maior volume recente de casos); verde = estável. PART_ANO_PCT e PART_4S_PCT mostram a contribuição da unidade no município selecionado.")
         )
-      ) %>%
-      arrange(desc(casos), desc(surtos), unidade_saude)
-  })
-
-  output$grafico_unidade_saude <- renderPlotly({
-    if (is.null(input$filtro_municipio) || input$filtro_municipio == "Todos") {
-      return(empty_plotly("Selecione um município para visualizar o ranking por unidade de saúde."))
-    }
-
-    df <- resumo_unidade_saude()
-    if (nrow(df) == 0 || sum(df$casos, na.rm = TRUE) <= 0) {
-      return(empty_plotly("Sem dados por unidade de saúde para o recorte atual."))
-    }
-
-    top_n <- min(15, nrow(df))
-    df_top <- utils::head(df, top_n)
-
-    plot_ly(
-      df_top,
-      x = ~casos,
-      y = ~reorder(unidade_saude, casos),
-      type = "bar",
-      orientation = "h",
-      marker = list(color = "#1e88e5", opacity = 0.9),
-      hovertemplate = paste0(
-        "Unidade: %{y}<br>",
-        "Casos: %{x}<br>",
-        "Surtos notificados: %{customdata[1]}<br>",
-        "Semanas com registro: %{customdata[2]}<extra></extra>"
-      ),
-      customdata = ~cbind(surtos, semanas_com_registro)
-    ) %>%
-      layout(
-        showlegend = FALSE,
-        margin = list(l = 210, r = 20, t = 10, b = 45),
-        plot_bgcolor = "rgba(245,245,245,0.5)",
-        paper_bgcolor = "white",
-        xaxis = list(title = "Casos", showgrid = TRUE, gridcolor = "#e5e7eb"),
-        yaxis = list(title = NULL, showgrid = FALSE)
       )
+    }
+
+    tags$small(
+      class = "legend-note d-block mt-2",
+      HTML("<strong>Legenda tabela:</strong> vermelho = alerta (surto notificado ou incidência 4 semanas elevada); verde = estável. INCID_4S orienta ação rápida; INCID_ANUAL mostra acumulado.")
+    )
   })
 
   modelo_tendencia <- reactive({
@@ -1732,8 +1748,27 @@ server <- function(input, output, session) {
   tabela_operacional_municipios <- reactive({
     df <- dados_contexto_periodo()
     todos_anos <- is_all_years_selected()
+    municipio_especifico <- is_municipio_selected()
 
     if (nrow(df) == 0) {
+      if (municipio_especifico) {
+        return(
+          tibble::tibble(
+            gve = character(),
+            municipio = character(),
+            unidade_saude = character(),
+            ano = character(),
+            total_ano = numeric(),
+            part_ano_pct = numeric(),
+            total_4s = numeric(),
+            part_4s_pct = numeric(),
+            surtos = numeric(),
+            alerta = character(),
+            alerta_flag = integer()
+          )
+        )
+      }
+
       return(
         tibble::tibble(
           gve = character(),
@@ -1758,6 +1793,69 @@ server <- function(input, output, session) {
       semana_limite <- 53
     }
     semana_inicio <- max(1, as.integer(semana_limite) - 3)
+
+    if (municipio_especifico) {
+      resumo_ano <- df %>%
+        mutate(
+          unidade_saude = ifelse(
+            is.na(unidade_saude) | trimws(unidade_saude) == "",
+            "Não informado",
+            unidade_saude
+          ),
+          ano = if (todos_anos) "Todos" else as.character(ano)
+        ) %>%
+        group_by(gve, municipio, unidade_saude, ano) %>%
+        summarise(
+          total_ano = sum(casos, na.rm = TRUE),
+          surtos = sum(surtos, na.rm = TRUE),
+          .groups = "drop"
+        )
+
+      resumo_4s <- df %>%
+        mutate(
+          unidade_saude = ifelse(
+            is.na(unidade_saude) | trimws(unidade_saude) == "",
+            "Não informado",
+            unidade_saude
+          ),
+          ano = if (todos_anos) "Todos" else as.character(ano)
+        ) %>%
+        filter(semana >= semana_inicio, semana <= semana_limite) %>%
+        group_by(gve, municipio, unidade_saude, ano) %>%
+        summarise(
+          total_4s = sum(casos, na.rm = TRUE),
+          .groups = "drop"
+        )
+
+      resumo <- resumo_ano %>%
+        left_join(resumo_4s, by = c("gve", "municipio", "unidade_saude", "ano")) %>%
+        mutate(total_4s = tidyr::replace_na(total_4s, 0)) %>%
+        group_by(ano) %>%
+        mutate(
+          part_ano_pct = ifelse(sum(total_ano, na.rm = TRUE) > 0, (total_ano / sum(total_ano, na.rm = TRUE)) * 100, 0),
+          part_4s_pct = ifelse(sum(total_4s, na.rm = TRUE) > 0, (total_4s / sum(total_4s, na.rm = TRUE)) * 100, 0)
+        ) %>%
+        ungroup()
+
+      limiar_alerta_unidade <- suppressWarnings(stats::quantile(
+        resumo$total_4s[is.finite(resumo$total_4s) & resumo$total_4s > 0],
+        probs = 0.75,
+        na.rm = TRUE
+      ))
+
+      if (!is.finite(limiar_alerta_unidade) || limiar_alerta_unidade <= 0) {
+        limiar_alerta_unidade <- Inf
+      }
+
+      return(
+        resumo %>%
+          mutate(
+            alerta_flag = ifelse(surtos > 0 | total_4s >= limiar_alerta_unidade, 1L, 0L),
+            alerta = ifelse(alerta_flag == 1L, "ALERTA", "ESTÁVEL")
+          ) %>%
+          arrange(desc(alerta_flag), desc(total_4s), desc(total_ano), unidade_saude)
+      )
+    }
 
     resumo_ano <- df %>%
       mutate(ano = if (todos_anos) "Todos" else as.character(ano)) %>%
@@ -1807,6 +1905,65 @@ server <- function(input, output, session) {
 
   output$tabela_municipios <- DT::renderDT({
     tabela_base <- tabela_operacional_municipios()
+    municipio_especifico <- is_municipio_selected()
+
+    if (municipio_especifico) {
+      tabela <- tabela_base %>%
+        transmute(
+          GVE = toupper(gve),
+          MUNICIPIO = toupper(municipio),
+          UNIDADE_SAUDE = toupper(unidade_saude),
+          ANO = as.character(ano),
+          TOTAL_ANO = total_ano,
+          PART_ANO_PCT = round(part_ano_pct, 1),
+          TOTAL_4S = total_4s,
+          PART_4S_PCT = round(part_4s_pct, 1),
+          SURTOS = surtos,
+          ALERTA = alerta,
+          alerta_flag = alerta_flag
+        )
+
+      return(
+        DT::datatable(
+          tabela,
+          rownames = FALSE,
+          class = "compact stripe hover",
+          options = list(
+            pageLength = 12,
+            lengthMenu = c(12, 25, 50, 100),
+            autoWidth = TRUE,
+            order = list(list(10, "desc"), list(6, "desc"), list(4, "desc")),
+            dom = "tip",
+            columnDefs = list(
+              list(visible = FALSE, targets = 10)
+            )
+          )
+        ) %>%
+          DT::formatCurrency(
+            columns = c("TOTAL_ANO", "TOTAL_4S", "SURTOS"),
+            currency = "",
+            interval = 3,
+            mark = ".",
+            dec.mark = ",",
+            digits = 0
+          ) %>%
+          DT::formatRound(columns = c("PART_ANO_PCT", "PART_4S_PCT"), digits = 1) %>%
+          DT::formatStyle(
+            "PART_4S_PCT",
+            valueColumns = "alerta_flag",
+            backgroundColor = DT::styleEqual(c(1, 0), c("#f8d7da", "#d4edda")),
+            color = DT::styleEqual(c(1, 0), c("#7f1d1d", "#14532d")),
+            fontWeight = "700"
+          ) %>%
+          DT::formatStyle(
+            "ALERTA",
+            valueColumns = "alerta_flag",
+            backgroundColor = DT::styleEqual(c(1, 0), c("#f8d7da", "#d4edda")),
+            color = DT::styleEqual(c(1, 0), c("#7f1d1d", "#14532d")),
+            fontWeight = "700"
+          )
+      )
+    }
 
     tabela <- tabela_base %>%
       transmute(
