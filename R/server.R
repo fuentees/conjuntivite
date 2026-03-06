@@ -19,8 +19,107 @@ ensure_attached_package("leaflet")
 ensure_attached_package("DT")
 
 server <- function(input, output, session) {
-  anos_ordenados <- sort(unique(dados_epidemiologicos$ano), decreasing = TRUE)
-  ano_padrao <- if (length(anos_ordenados) > 0) as.character(anos_ordenados[1]) else as.character(format(Sys.Date(), "%Y"))
+  compute_ano_padrao <- function(df) {
+    anos <- sort(unique(df$ano), decreasing = TRUE)
+    if (length(anos) > 0) {
+      return(as.character(anos[1]))
+    }
+    as.character(format(Sys.Date(), "%Y"))
+  }
+
+  resolve_data_source_label <- function(df, mode) {
+    source_attr <- attr(df, "data_source")
+    if (!is.null(source_attr) && source_attr != "") {
+      return(as.character(source_attr))
+    }
+    if (identical(mode, "json")) {
+      return("json")
+    }
+    if (identical(mode, "db")) {
+      return("database")
+    }
+    "auto"
+  }
+
+  load_dataset_runtime <- function() {
+    data_mode_runtime <- tolower(trimws(Sys.getenv("OFTALMO_DATA_MODE", unset = "auto")))
+    if (!(data_mode_runtime %in% c("auto", "db", "json"))) {
+      data_mode_runtime <- "auto"
+    }
+
+    json_path_runtime <- trimws(Sys.getenv("OFTALMO_JSON_PATH", unset = ""))
+    json_url_runtime <- trimws(Sys.getenv("OFTALMO_JSON_URL", unset = ""))
+
+    dataset <- load_epidemiological_data(
+      prefer_db = data_mode_runtime %in% c("auto", "db"),
+      prefer_json = data_mode_runtime == "json",
+      enable_json = data_mode_runtime %in% c("auto", "json"),
+      json_path = json_path_runtime,
+      json_url = json_url_runtime
+    )
+
+    list(
+      data = dataset,
+      source = resolve_data_source_label(dataset, data_mode_runtime)
+    )
+  }
+
+  dataset_signature <- function(df) {
+    if (is.null(df) || nrow(df) == 0) {
+      return("empty")
+    }
+    ano_max <- suppressWarnings(max(df$ano, na.rm = TRUE))
+    semana_max <- suppressWarnings(max(df$semana[df$ano == ano_max], na.rm = TRUE))
+    total_casos <- suppressWarnings(sum(df$casos, na.rm = TRUE))
+    paste(nrow(df), ano_max, semana_max, total_casos, sep = "|")
+  }
+
+  dados_runtime <- reactiveVal(dados_epidemiologicos)
+  fonte_runtime <- reactiveVal(dados_fonte)
+  assinatura_runtime <- reactiveVal(dataset_signature(dados_epidemiologicos))
+  ultima_atualizacao <- reactiveVal(Sys.time())
+  ano_choices_cache <- reactiveVal(c("Todos", as.character(sort(unique(dados_epidemiologicos$ano), decreasing = TRUE))))
+
+  dados_base <- reactive({
+    dados_runtime()
+  })
+
+  anos_ordenados <- reactive({
+    sort(unique(dados_base()$ano), decreasing = TRUE)
+  })
+
+  refresh_minutes <- suppressWarnings(as.numeric(Sys.getenv("OFTALMO_REFRESH_MINUTES", unset = "5")))
+  refresh_ms <- if (is.finite(refresh_minutes) && refresh_minutes > 0) {
+    as.integer(round(refresh_minutes * 60 * 1000))
+  } else {
+    0L
+  }
+
+  if (refresh_ms > 0) {
+    observe({
+      invalidateLater(refresh_ms, session)
+
+      refreshed <- tryCatch(
+        load_dataset_runtime(),
+        error = function(e) {
+          warning("Falha ao atualizar dados do painel: ", conditionMessage(e))
+          NULL
+        }
+      )
+
+      if (is.null(refreshed) || is.null(refreshed$data) || nrow(refreshed$data) == 0) {
+        return(invisible(NULL))
+      }
+
+      assinatura_nova <- dataset_signature(refreshed$data)
+      if (!identical(assinatura_nova, assinatura_runtime())) {
+        dados_runtime(refreshed$data)
+        fonte_runtime(refreshed$source)
+        assinatura_runtime(assinatura_nova)
+        ultima_atualizacao(Sys.time())
+      }
+    })
+  }
 
   empty_plotly <- function(message) {
     plotly::plot_ly() %>%
@@ -43,7 +142,7 @@ server <- function(input, output, session) {
 
   selected_year <- reactive({
     if (is.null(input$filtro_ano) || identical(input$filtro_ano, "Todos")) {
-      df_ref <- dados_epidemiologicos
+      df_ref <- dados_base()
 
       if (!is.null(input$filtro_drs) && input$filtro_drs != "Todas") {
         df_ref <- df_ref %>% filter(drs == input$filtro_drs)
@@ -79,8 +178,9 @@ server <- function(input, output, session) {
         return(as.integer(anos_validos$ano[1]))
       }
 
-      if (length(anos_ordenados) > 0) {
-        return(as.integer(anos_ordenados[1]))
+      anos_atuais <- anos_ordenados()
+      if (length(anos_atuais) > 0) {
+        return(as.integer(anos_atuais[1]))
       }
       return(as.integer(format(Sys.Date(), "%Y")))
     }
@@ -93,13 +193,15 @@ server <- function(input, output, session) {
   })
 
   output$fonte_dados <- renderText({
-    if (identical(dados_fonte, "database")) {
+    fonte_atual <- fonte_runtime()
+    fonte_texto <- if (identical(fonte_atual, "database")) {
       "Fonte: Banco MariaDB"
-    } else if (identical(dados_fonte, "json")) {
+    } else if (identical(fonte_atual, "json")) {
       "Fonte: JSON (arquivo/URL)"
     } else {
-      paste0("Fonte: ", as.character(dados_fonte))
+      paste0("Fonte: ", as.character(fonte_atual))
     }
+    paste0(fonte_texto, " | Atualizado: ", format(ultima_atualizacao(), "%H:%M:%S"))
   })
 
   clean_choice_values <- function(values) {
@@ -109,19 +211,49 @@ server <- function(input, output, session) {
     sort(unique(values))
   }
 
-  all_drs_choices <- clean_choice_values(dados_epidemiologicos$drs)
-  all_gve_choices <- clean_choice_values(dados_epidemiologicos$gve)
-  all_municipio_choices <- clean_choice_values(dados_epidemiologicos$municipio)
+  all_drs_choices <- reactive({
+    choices <- clean_choice_values(dados_base()$drs)
+    if (length(choices) == 0) choices <- "Não informado"
+    choices
+  })
+  all_gve_choices <- reactive({
+    choices <- clean_choice_values(dados_base()$gve)
+    if (length(choices) == 0) choices <- "Não informado"
+    choices
+  })
+  all_municipio_choices <- reactive({
+    choices <- clean_choice_values(dados_base()$municipio)
+    if (length(choices) == 0) choices <- "Não informado"
+    choices
+  })
 
-  if (length(all_drs_choices) == 0) {
-    all_drs_choices <- "Não informado"
-  }
-  if (length(all_gve_choices) == 0) {
-    all_gve_choices <- "Não informado"
-  }
-  if (length(all_municipio_choices) == 0) {
-    all_municipio_choices <- "Não informado"
-  }
+  observeEvent(dados_base(), {
+    anos_choices <- sort(unique(dados_base()$ano), decreasing = TRUE)
+    if (length(anos_choices) == 0) {
+      anos_choices <- as.integer(format(Sys.Date(), "%Y"))
+    }
+    novos_choices <- c("Todos", as.character(anos_choices))
+
+    selected_ano <- if (!is.null(input$filtro_ano) && input$filtro_ano %in% novos_choices) {
+      input$filtro_ano
+    } else {
+      compute_ano_padrao(dados_base())
+    }
+
+    needs_update <- !identical(novos_choices, ano_choices_cache()) ||
+      is.null(input$filtro_ano) ||
+      !(input$filtro_ano %in% novos_choices)
+
+    if (isTRUE(needs_update)) {
+      updateSelectInput(
+        session,
+        "filtro_ano",
+        choices = novos_choices,
+        selected = selected_ano
+      )
+      ano_choices_cache(novos_choices)
+    }
+  }, ignoreInit = TRUE)
 
   is_sao_paulo_selected <- reactive({
     !is.null(input$filtro_municipio) &&
@@ -135,9 +267,9 @@ server <- function(input, output, session) {
     }
 
     df <- if (identical(input$filtro_ano, "Todos")) {
-      dados_epidemiologicos
+      dados_base()
     } else {
-      dados_epidemiologicos %>% filter(ano == selected_year())
+      dados_base() %>% filter(ano == selected_year())
     }
 
     if (!is.null(input$filtro_drs) && input$filtro_drs != "Todas") {
@@ -183,14 +315,14 @@ server <- function(input, output, session) {
   observeEvent(input$filtro_ano, {
     req(input$filtro_ano)
     df_ano <- if (identical(input$filtro_ano, "Todos")) {
-      dados_epidemiologicos
+      dados_base()
     } else {
-      dados_epidemiologicos %>% filter(ano == selected_year())
+      dados_base() %>% filter(ano == selected_year())
     }
 
     drs_choices <- clean_choice_values(df_ano$drs)
     if (length(drs_choices) == 0) {
-      drs_choices <- all_drs_choices
+      drs_choices <- all_drs_choices()
     }
 
     updateSelectInput(
@@ -199,16 +331,16 @@ server <- function(input, output, session) {
       choices = c("Todas", drs_choices),
       selected = "Todas"
     )
-    updateSelectInput(session, "filtro_gve", choices = c("Todas", all_gve_choices), selected = "Todas")
-    updateSelectInput(session, "filtro_municipio", choices = c("Todos", all_municipio_choices), selected = "Todos")
+    updateSelectInput(session, "filtro_gve", choices = c("Todas", all_gve_choices()), selected = "Todas")
+    updateSelectInput(session, "filtro_municipio", choices = c("Todos", all_municipio_choices()), selected = "Todos")
   }, ignoreNULL = FALSE)
 
   observeEvent(input$filtro_drs, {
     req(input$filtro_ano)
     df_ano <- if (identical(input$filtro_ano, "Todos")) {
-      dados_epidemiologicos
+      dados_base()
     } else {
-      dados_epidemiologicos %>% filter(ano == selected_year())
+      dados_base() %>% filter(ano == selected_year())
     }
     df <- df_ano
 
@@ -219,14 +351,14 @@ server <- function(input, output, session) {
     gve_choices <- clean_choice_values(df$gve)
     if (length(gve_choices) == 0) {
       if (!is.null(input$filtro_drs) && input$filtro_drs != "Todas") {
-        gve_choices <- clean_choice_values(dados_epidemiologicos$gve[dados_epidemiologicos$drs == input$filtro_drs])
+        gve_choices <- clean_choice_values(dados_base()$gve[dados_base()$drs == input$filtro_drs])
       }
 
       if (length(gve_choices) == 0) {
         gve_choices <- clean_choice_values(df_ano$gve)
       }
       if (length(gve_choices) == 0) {
-        gve_choices <- all_gve_choices
+        gve_choices <- all_gve_choices()
       }
     }
 
@@ -236,15 +368,15 @@ server <- function(input, output, session) {
       choices = c("Todas", gve_choices),
       selected = "Todas"
     )
-    updateSelectInput(session, "filtro_municipio", choices = c("Todos", all_municipio_choices), selected = "Todos")
+    updateSelectInput(session, "filtro_municipio", choices = c("Todos", all_municipio_choices()), selected = "Todos")
   }, ignoreNULL = FALSE)
 
   observeEvent(input$filtro_gve, {
     req(input$filtro_ano)
     df_ano <- if (identical(input$filtro_ano, "Todos")) {
-      dados_epidemiologicos
+      dados_base()
     } else {
-      dados_epidemiologicos %>% filter(ano == selected_year())
+      dados_base() %>% filter(ano == selected_year())
     }
     df <- df_ano
 
@@ -259,13 +391,13 @@ server <- function(input, output, session) {
     mun_choices <- clean_choice_values(df$municipio)
     if (length(mun_choices) == 0) {
       if (!is.null(input$filtro_gve) && input$filtro_gve != "Todas") {
-        mun_choices <- clean_choice_values(dados_epidemiologicos$municipio[dados_epidemiologicos$gve == input$filtro_gve])
+        mun_choices <- clean_choice_values(dados_base()$municipio[dados_base()$gve == input$filtro_gve])
       }
       if (length(mun_choices) == 0) {
         mun_choices <- clean_choice_values(df_ano$municipio)
       }
       if (length(mun_choices) == 0) {
-        mun_choices <- all_municipio_choices
+        mun_choices <- all_municipio_choices()
       }
     }
 
@@ -278,7 +410,7 @@ server <- function(input, output, session) {
   }, ignoreNULL = FALSE)
 
   observeEvent(input$btn_reset, {
-    updateSelectInput(session, "filtro_ano", selected = ano_padrao)
+    updateSelectInput(session, "filtro_ano", selected = compute_ano_padrao(dados_base()))
     updateSelectInput(session, "filtro_drs", selected = "Todas")
     updateSelectInput(session, "filtro_gve", selected = "Todas")
     updateSelectInput(session, "filtro_municipio", selected = "Todos")
@@ -289,7 +421,7 @@ server <- function(input, output, session) {
 
   dados_filtrados_dimensoes <- reactive({
     req(input$filtro_ano)
-    df <- dados_epidemiologicos
+    df <- dados_base()
 
     if (!is.null(input$filtro_drs) && input$filtro_drs != "Todas") {
       df <- df %>% filter(drs == input$filtro_drs)

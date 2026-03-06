@@ -105,6 +105,7 @@ export OFTALMO_COL_TREINAMENTO="nome_real_coluna_treinamento"
 export OFTALMO_COL_COLETA_MATERIAL="nome_real_coluna_coleta_material"
 export OFTALMO_COL_ENCAMINHAMENTO="nome_real_coluna_encaminhamento"
 export OFTALMO_COL_MEDIDA_ADOTADA="nome_real_coluna_medida_adotada"
+export OFTALMO_COL_UNIDADE="nome_real_coluna_unidade_saude"
 ```
 
 Configuração de fonte JSON (útil para cloud sem acesso ao banco privado):
@@ -114,10 +115,12 @@ export OFTALMO_DATA_MODE="json"   # auto | db | json
 export OFTALMO_JSON_PATH="/caminho/oftalmo_snapshot.json"
 export OFTALMO_JSON_URL="https://seu-servidor/oftalmo_snapshot.json"
 export OFTALMO_JSON_RECENT_YEARS="8"   # opcional: limita anos mais recentes para reduzir memória
+export OFTALMO_REFRESH_MINUTES="5"     # opcional: recarrega dados periodicamente (0 desativa)
 ```
 
 > Quando `OFTALMO_DATA_MODE=json`, o app usa `OFTALMO_JSON_PATH` (se existir) e depois `OFTALMO_JSON_URL`.
 > Em ambientes com pouca memória (ex.: shinyapps.io), configure `OFTALMO_JSON_RECENT_YEARS` para reduzir consumo no startup.
+> Para atualizar automaticamente sem reiniciar a aplicação, use `OFTALMO_REFRESH_MINUTES` (padrão = 5 minutos).
 > Se DB/JSON não estiverem acessíveis, o app interrompe a inicialização (não há fallback com dados fictícios).
 
 ## Instalação
