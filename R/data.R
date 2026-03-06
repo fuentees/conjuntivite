@@ -481,22 +481,53 @@ get_local_shape_layer <- local({
 })
 
 parse_notification_date <- function(value) {
-  value <- as.character(value)
-  parsed <- suppressWarnings(
-    parse_date_time(
-      value,
-      orders = c(
-        "Y-m-dTH:M:OSz", "Y-m-dTH:M:OS", "Y-m-dTH:M:Sz", "Y-m-dTH:M:S", "Y-m-dTH:M",
-        "d/m/Y H:M:S", "d/m/Y H:M", "d/m/Y",
-        "d/m/y H:M:S", "d/m/y H:M", "d/m/y",
-        "Y-m-d H:M:S", "Y-m-d H:M", "Y-m-d",
-        "Y/m/d H:M:S", "Y/m/d H:M", "Y/m/d",
-        "d-m-Y H:M:S", "d-m-Y H:M", "d-m-Y",
-        "m/d/Y H:M:S", "m/d/Y H:M", "m/d/Y"
-      ),
-      quiet = TRUE
-    )
+  x <- trimws(as.character(value))
+  x[x %in% c("", "NA", "N/A", "NULL", "NaN")] <- NA_character_
+
+  if (length(x) == 0) {
+    return(as.Date(character()))
+  }
+
+  # Compatibiliza formatos ISO e timezone para strptime/as.POSIXct.
+  x_norm <- gsub("T", " ", x, fixed = TRUE)
+  x_norm <- sub("Z$", "+0000", x_norm)
+  x_norm <- sub("([+-][0-9]{2}):([0-9]{2})$", "\\1\\2", x_norm)
+
+  parsed <- as.POSIXct(rep(NA_real_, length(x_norm)), origin = "1970-01-01", tz = "UTC")
+  formats <- c(
+    "%Y-%m-%d %H:%M:%OS%z",
+    "%Y-%m-%d %H:%M:%S%z",
+    "%Y-%m-%d %H:%M%z",
+    "%Y-%m-%d %H:%M:%OS",
+    "%Y-%m-%d %H:%M:%S",
+    "%Y-%m-%d %H:%M",
+    "%Y-%m-%d",
+    "%Y/%m/%d %H:%M:%S",
+    "%Y/%m/%d %H:%M",
+    "%Y/%m/%d",
+    "%d/%m/%Y %H:%M:%S",
+    "%d/%m/%Y %H:%M",
+    "%d/%m/%Y",
+    "%d/%m/%y %H:%M:%S",
+    "%d/%m/%y %H:%M",
+    "%d/%m/%y",
+    "%d-%m-%Y %H:%M:%S",
+    "%d-%m-%Y %H:%M",
+    "%d-%m-%Y",
+    "%m/%d/%Y %H:%M:%S",
+    "%m/%d/%Y %H:%M",
+    "%m/%d/%Y"
   )
+
+  for (fmt in formats) {
+    idx <- which(!is.na(x_norm) & is.na(parsed))
+    if (length(idx) == 0) break
+    tried <- suppressWarnings(as.POSIXct(x_norm[idx], format = fmt, tz = "UTC"))
+    ok <- !is.na(tried)
+    if (any(ok)) {
+      parsed[idx[ok]] <- tried[ok]
+    }
+  }
 
   as.Date(parsed)
 }
