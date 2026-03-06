@@ -95,8 +95,8 @@ ui <- tagList(
             width: 100%;
             height: 180px;
             max-height: none;
-            object-fit: contain;
-            object-position: center top;
+            object-fit: cover;
+            object-position: center;
             display: block;
           }
           .app-container {
