@@ -547,6 +547,22 @@ prepare_oftalmo_dataset <- function(raw_data) {
     candidates = c("UVIS", "uvis"),
     regex_candidates = c("uvis")
   )
+  unidade_saude_col <- pick_column_with_override(
+    raw_data,
+    override_env_var = "OFTALMO_COL_UNIDADE",
+    candidates = c(
+      "Unid_notificacao",
+      "unid_notificacao",
+      "UnidadeNotificacao",
+      "unidade_notificacao",
+      "UnidadeSaude",
+      "unidade_saude",
+      "Unidade",
+      "unidade",
+      "nCNES"
+    ),
+    regex_candidates = c("unid", "unidade", "cnes")
+  )
   drs_col <- pick_column_with_override(
     raw_data,
     override_env_var = "OFTALMO_COL_DRS",
@@ -684,6 +700,11 @@ prepare_oftalmo_dataset <- function(raw_data) {
       gve_codigo = if (!is.null(gve_code_col)) sanitize_geo_code(.data[[gve_code_col]]) else NA_character_,
       uvis = if (!is.null(uvis_col)) sanitize_dimension_values(.data[[uvis_col]], default = NA_character_) else NA_character_,
       uvis = ifelse(normalize_key(municipio) == "sao paulo", uvis, NA_character_),
+      unidade_saude = if (!is.null(unidade_saude_col)) {
+        sanitize_dimension_values(.data[[unidade_saude_col]])
+      } else {
+        "Não informado"
+      },
       drs = if (!is.null(drs_col)) sanitize_dimension_values(.data[[drs_col]]) else "Não informado",
       drs_codigo = if (!is.null(drs_code_col)) sanitize_geo_code(.data[[drs_code_col]]) else NA_character_,
       drs = ifelse(
@@ -740,7 +761,7 @@ prepare_oftalmo_dataset <- function(raw_data) {
       encaminhamentos = ifelse(is.na(encaminhamentos), 0, pmax(round(encaminhamentos), 0))
     ) %>%
     filter(!is.na(ano), !is.na(semana)) %>%
-    group_by(ano, semana, drs, drs_codigo, gve, gve_codigo, municipio, uvis, populacao) %>%
+    group_by(ano, semana, drs, drs_codigo, gve, gve_codigo, municipio, uvis, unidade_saude, populacao) %>%
     summarise(
       casos = sum(casos, na.rm = TRUE),
       surtos = sum(surtos, na.rm = TRUE),
@@ -760,7 +781,7 @@ prepare_oftalmo_dataset <- function(raw_data) {
     mutate(
       incidencia = ifelse(populacao > 0, round((casos / populacao) * 100000, 2), NA_real_)
     ) %>%
-    arrange(ano, semana, drs, gve, municipio, uvis)
+    arrange(ano, semana, drs, gve, municipio, uvis, unidade_saude)
 
   if (nrow(df) == 0) {
     return(NULL)
@@ -812,6 +833,18 @@ normalize_internal_oftalmo_dataset <- function(df, aggregate = TRUE) {
   df <- rename_first_match(df, "gve_codigo", c("gve_codigo", "gve_numero", "cod_gve", "codigo_gve"))
   df <- rename_first_match(df, "municipio", c("municipio", "municipionotificacao"))
   df <- rename_first_match(df, "uvis", c("uvis"))
+  df <- rename_first_match(
+    df,
+    "unidade_saude",
+    c(
+      "unidade_saude",
+      "unidade",
+      "unidade_notificacao",
+      "unid_notificacao",
+      "unidadenotificacao",
+      "ncnes"
+    )
+  )
   df <- rename_first_match(df, "casos", c("casos", "totalcaso", "total_caso"))
   df <- rename_first_match(df, "populacao", c("populacao", "pop"))
   df <- rename_first_match(df, "incidencia", c("incidencia"))
@@ -838,6 +871,7 @@ normalize_internal_oftalmo_dataset <- function(df, aggregate = TRUE) {
   df <- add_default_col(df, "drs_codigo", NA_character_)
   df <- add_default_col(df, "gve_codigo", NA_character_)
   df <- add_default_col(df, "uvis", NA_character_)
+  df <- add_default_col(df, "unidade_saude", "Não informado")
   df <- add_default_col(df, "populacao", NA_real_)
   df <- add_default_col(df, "incidencia", NA_real_)
   df <- add_default_col(df, "surtos", 0)
@@ -865,6 +899,7 @@ normalize_internal_oftalmo_dataset <- function(df, aggregate = TRUE) {
       municipio = sanitize_dimension_values(municipio),
       uvis = sanitize_dimension_values(uvis, default = NA_character_),
       uvis = ifelse(normalize_key(municipio) == "sao paulo", uvis, NA_character_),
+      unidade_saude = sanitize_dimension_values(unidade_saude),
       casos = ifelse(is.na(casos), 0, pmax(round(sanitize_numeric_values(casos, default = 0)), 0)),
       populacao = sanitize_numeric_values(populacao, default = NA_real_),
       populacao = ifelse(is.na(populacao) | !is.finite(populacao) | populacao <= 0, NA_real_, populacao),
@@ -885,7 +920,7 @@ normalize_internal_oftalmo_dataset <- function(df, aggregate = TRUE) {
 
   if (isTRUE(aggregate)) {
     df <- df %>%
-      group_by(ano, semana, drs, drs_codigo, gve, gve_codigo, municipio, uvis, populacao) %>%
+      group_by(ano, semana, drs, drs_codigo, gve, gve_codigo, municipio, uvis, unidade_saude, populacao) %>%
       summarise(
         casos = sum(casos, na.rm = TRUE),
         surtos = sum(surtos, na.rm = TRUE),
@@ -917,7 +952,7 @@ normalize_internal_oftalmo_dataset <- function(df, aggregate = TRUE) {
   }
 
   df <- df %>%
-    arrange(ano, semana, drs, gve, municipio, uvis)
+    arrange(ano, semana, drs, gve, municipio, uvis, unidade_saude)
 
   if (nrow(df) == 0) {
     return(NULL)

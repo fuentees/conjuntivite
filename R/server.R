@@ -20,7 +20,7 @@ ensure_attached_package("DT")
 
 server <- function(input, output, session) {
   anos_ordenados <- sort(unique(dados_epidemiologicos$ano), decreasing = TRUE)
-  ano_padrao <- "Todos"
+  ano_padrao <- if (length(anos_ordenados) > 0) as.character(anos_ordenados[1]) else as.character(format(Sys.Date(), "%Y"))
 
   empty_plotly <- function(message) {
     plotly::plot_ly() %>%
@@ -86,6 +86,10 @@ server <- function(input, output, session) {
     }
 
     suppressWarnings(as.integer(input$filtro_ano))
+  })
+
+  is_all_years_selected <- reactive({
+    identical(input$filtro_ano, "Todos")
   })
 
   output$fonte_dados <- renderText({
@@ -322,6 +326,13 @@ server <- function(input, output, session) {
       filter(ano == ano_ref)
   })
 
+  dados_contexto_periodo <- reactive({
+    if (is_all_years_selected()) {
+      return(dados_filtrados_dimensoes())
+    }
+    dados_ano_referencia()
+  })
+
   serie_semanal_atual <- reactive({
     df <- dados_ano_referencia() %>%
       group_by(semana) %>%
@@ -439,19 +450,21 @@ server <- function(input, output, session) {
   })
 
   output$total_casos <- renderText({
-    df <- dados_ano_referencia()
+    df <- dados_contexto_periodo()
     format(sum(df$casos, na.rm = TRUE), big.mark = ".", decimal.mark = ",")
   })
 
   output$incidencia_media <- renderText({
-    df <- dados_ano_referencia()
+    df <- dados_contexto_periodo()
 
     if (nrow(df) == 0) {
       return("0,00")
     }
 
     pop_total <- df %>%
-      distinct(municipio, populacao) %>%
+      group_by(municipio) %>%
+      summarise(populacao = suppressWarnings(max(populacao, na.rm = TRUE)), .groups = "drop") %>%
+      mutate(populacao = ifelse(is.infinite(populacao) | populacao <= 0, NA_real_, populacao)) %>%
       summarise(total_pop = sum(populacao, na.rm = TRUE)) %>%
       pull(total_pop)
 
@@ -669,7 +682,7 @@ server <- function(input, output, session) {
   })
 
   output$grafico_casos_gve <- renderPlotly({
-    df_base <- dados_ano_referencia()
+    df_base <- dados_contexto_periodo()
     gve_especifico <- !is.null(input$filtro_gve) && input$filtro_gve != "Todas"
 
     if (gve_especifico) {
@@ -714,6 +727,75 @@ server <- function(input, output, session) {
         paper_bgcolor = "white",
         xaxis = list(title = x_title, tickangle = 35, showgrid = FALSE),
         yaxis = list(title = "Casos", showgrid = TRUE, gridcolor = "#e5e7eb")
+      )
+  })
+
+  output$titulo_grafico_unidade_saude <- renderText({
+    if (!is.null(input$filtro_municipio) && input$filtro_municipio != "Todos") {
+      paste0("Unidades de saúde com mais casos — ", input$filtro_municipio)
+    } else {
+      "Unidades de saúde (selecione um município)"
+    }
+  })
+
+  resumo_unidade_saude <- reactive({
+    if (is.null(input$filtro_municipio) || input$filtro_municipio == "Todos") {
+      return(tibble::tibble())
+    }
+
+    dados_contexto_periodo() %>%
+      group_by(unidade_saude) %>%
+      summarise(
+        casos = sum(casos, na.rm = TRUE),
+        surtos = sum(surtos, na.rm = TRUE),
+        semanas_com_registro = sum(casos > 0, na.rm = TRUE),
+        .groups = "drop"
+      ) %>%
+      mutate(
+        unidade_saude = ifelse(
+          is.na(unidade_saude) | trimws(unidade_saude) == "",
+          "Não informado",
+          unidade_saude
+        )
+      ) %>%
+      arrange(desc(casos), desc(surtos), unidade_saude)
+  })
+
+  output$grafico_unidade_saude <- renderPlotly({
+    if (is.null(input$filtro_municipio) || input$filtro_municipio == "Todos") {
+      return(empty_plotly("Selecione um município para visualizar o ranking por unidade de saúde."))
+    }
+
+    df <- resumo_unidade_saude()
+    if (nrow(df) == 0 || sum(df$casos, na.rm = TRUE) <= 0) {
+      return(empty_plotly("Sem dados por unidade de saúde para o recorte atual."))
+    }
+
+    top_n <- min(15, nrow(df))
+    df_top <- utils::head(df, top_n)
+
+    plot_ly(
+      df_top,
+      x = ~casos,
+      y = ~reorder(unidade_saude, casos),
+      type = "bar",
+      orientation = "h",
+      marker = list(color = "#1e88e5", opacity = 0.9),
+      hovertemplate = paste0(
+        "Unidade: %{y}<br>",
+        "Casos: %{x}<br>",
+        "Surtos notificados: %{customdata[1]}<br>",
+        "Semanas com registro: %{customdata[2]}<extra></extra>"
+      ),
+      customdata = ~cbind(surtos, semanas_com_registro)
+    ) %>%
+      layout(
+        showlegend = FALSE,
+        margin = list(l = 210, r = 20, t = 10, b = 45),
+        plot_bgcolor = "rgba(245,245,245,0.5)",
+        paper_bgcolor = "white",
+        xaxis = list(title = "Casos", showgrid = TRUE, gridcolor = "#e5e7eb"),
+        yaxis = list(title = NULL, showgrid = FALSE)
       )
   })
 
@@ -1299,7 +1381,7 @@ server <- function(input, output, session) {
   })
 
   output$grafico_sexo <- renderPlotly({
-    df <- dados_ano_referencia()
+    df <- dados_contexto_periodo()
 
     if (nrow(df) == 0) {
       return(empty_plotly("Sem dados de sexo para os filtros selecionados"))
@@ -1337,7 +1419,7 @@ server <- function(input, output, session) {
   })
 
   resumo_faixa_etaria <- reactive({
-    df <- dados_ano_referencia()
+    df <- dados_contexto_periodo()
 
     faixas <- c("< 1 ano", "1 a 4", "5 a 9", "10 a 14", "15+")
     zero_tbl <- tibble::tibble(faixa = faixas, casos = 0, origem = "sem_dados")
@@ -1407,7 +1489,7 @@ server <- function(input, output, session) {
   })
 
   output$grafico_acoes_treinamentos <- renderPlotly({
-    df <- dados_ano_referencia()
+    df <- dados_contexto_periodo()
 
     if (nrow(df) == 0) {
       return(empty_plotly("Sem dados de ações para os filtros selecionados"))
@@ -1510,7 +1592,7 @@ server <- function(input, output, session) {
   })
 
   resumo_municipios <- reactive({
-    df <- dados_ano_referencia()
+    df <- dados_contexto_periodo()
 
     if (nrow(df) == 0) {
       return(
@@ -1544,14 +1626,15 @@ server <- function(input, output, session) {
   })
 
   tabela_operacional_municipios <- reactive({
-    df <- dados_ano_referencia()
+    df <- dados_contexto_periodo()
+    todos_anos <- is_all_years_selected()
 
     if (nrow(df) == 0) {
       return(
         tibble::tibble(
           gve = character(),
           municipio = character(),
-          ano = integer(),
+          ano = character(),
           populacao = numeric(),
           total_ano = numeric(),
           incidencia_anual = numeric(),
@@ -1573,6 +1656,7 @@ server <- function(input, output, session) {
     semana_inicio <- max(1, as.integer(semana_limite) - 3)
 
     resumo_ano <- df %>%
+      mutate(ano = if (todos_anos) "Todos" else as.character(ano)) %>%
       group_by(gve, municipio, ano) %>%
       summarise(
         populacao = max(populacao, na.rm = TRUE),
@@ -1582,6 +1666,7 @@ server <- function(input, output, session) {
       )
 
     resumo_4s <- df %>%
+      mutate(ano = if (todos_anos) "Todos" else as.character(ano)) %>%
       filter(semana >= semana_inicio, semana <= semana_limite) %>%
       group_by(gve, municipio, ano) %>%
       summarise(
@@ -1623,7 +1708,7 @@ server <- function(input, output, session) {
       transmute(
         GVE = toupper(gve),
         MUNICIPIO = toupper(municipio),
-        ANO = as.integer(ano),
+        ANO = as.character(ano),
         POPULACAO = populacao,
         TOTAL_ANO = total_ano,
         INCID_ANUAL = round(incidencia_anual, 2),
@@ -1681,7 +1766,7 @@ server <- function(input, output, session) {
   }, server = FALSE)
 
   dados_mapa_nivel <- reactive({
-    df <- dados_ano_referencia()
+    df <- dados_contexto_periodo()
     nivel <- nivel_mapa_atual()
 
     if (nrow(df) == 0) {
@@ -1701,7 +1786,9 @@ server <- function(input, output, session) {
     }
 
     base_pop <- df %>%
-      distinct(drs, gve, municipio, populacao)
+      group_by(drs, gve, municipio) %>%
+      summarise(populacao = suppressWarnings(max(populacao, na.rm = TRUE)), .groups = "drop") %>%
+      mutate(populacao = ifelse(is.infinite(populacao) | populacao <= 0, NA_real_, populacao))
 
     if (nivel == "municipio") {
       return(
@@ -1780,10 +1867,12 @@ server <- function(input, output, session) {
 
   pontos_base_mapa <- reactive({
     nivel <- nivel_mapa_atual()
-    df_filtrado <- dados_ano_referencia()
+    df_filtrado <- dados_contexto_periodo()
 
     base <- df_filtrado %>%
-      distinct(drs, gve, municipio, populacao) %>%
+      group_by(drs, gve, municipio) %>%
+      summarise(populacao = suppressWarnings(max(populacao, na.rm = TRUE)), .groups = "drop") %>%
+      mutate(populacao = ifelse(is.infinite(populacao) | populacao <= 0, NA_real_, populacao)) %>%
       left_join(get_municipio_coords(df_filtrado$municipio), by = "municipio") %>%
       filter(is.finite(lat), is.finite(lng))
 

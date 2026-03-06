@@ -41,6 +41,7 @@ anos_disponiveis <- sort(unique(dados_epidemiologicos$ano), decreasing = TRUE)
 if (length(anos_disponiveis) == 0) {
   anos_disponiveis <- year(Sys.Date())
 }
+ano_preselecionado <- as.character(max(anos_disponiveis, na.rm = TRUE))
 drs_disponiveis <- sort(unique(as.character(dados_epidemiologicos$drs)))
 drs_disponiveis <- drs_disponiveis[!is.na(drs_disponiveis) & trimws(drs_disponiveis) != "" & tolower(drs_disponiveis) != "na"]
 
@@ -204,7 +205,7 @@ ui <- tagList(
                 "filtro_ano",
                 label = "Ano",
                 choices = c("Todos", as.character(anos_disponiveis)),
-                selected = "Todos",
+                selected = ano_preselecionado,
                 selectize = FALSE
               ),
               selectInput(
@@ -315,6 +316,20 @@ ui <- tagList(
             class = "custom-card",
             card_header(textOutput("titulo_grafico_casos_territorio", inline = TRUE)),
             plotlyOutput("grafico_casos_gve", height = "350px"),
+            full_screen = TRUE
+          )
+        ),
+        br(),
+        layout_columns(
+          col_widths = c(12),
+          card(
+            class = "custom-card",
+            card_header(textOutput("titulo_grafico_unidade_saude", inline = TRUE)),
+            plotlyOutput("grafico_unidade_saude", height = "340px"),
+            tags$small(
+              class = "legend-note d-block mt-2",
+              "Visual exibido quando um município específico é selecionado. Mostra as unidades com maior carga de casos no recorte atual."
+            ),
             full_screen = TRUE
           )
         ),
