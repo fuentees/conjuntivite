@@ -1176,9 +1176,9 @@ load_epidemiological_data <- function(
   )
 }
 
-data_mode <- tolower(trimws(Sys.getenv("OFTALMO_DATA_MODE", unset = "auto")))
+data_mode <- tolower(trimws(Sys.getenv("OFTALMO_DATA_MODE", unset = "db")))
 if (!(data_mode %in% c("auto", "db", "json"))) {
-  data_mode <- "auto"
+  data_mode <- "db"
 }
 
 json_path <- trimws(Sys.getenv("OFTALMO_JSON_PATH", unset = ""))

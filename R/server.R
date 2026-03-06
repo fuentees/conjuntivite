@@ -42,9 +42,9 @@ server <- function(input, output, session) {
   }
 
   load_dataset_runtime <- function() {
-    data_mode_runtime <- tolower(trimws(Sys.getenv("OFTALMO_DATA_MODE", unset = "auto")))
+    data_mode_runtime <- tolower(trimws(Sys.getenv("OFTALMO_DATA_MODE", unset = "db")))
     if (!(data_mode_runtime %in% c("auto", "db", "json"))) {
-      data_mode_runtime <- "auto"
+      data_mode_runtime <- "db"
     }
 
     json_path_runtime <- trimws(Sys.getenv("OFTALMO_JSON_PATH", unset = ""))

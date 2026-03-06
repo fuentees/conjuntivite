@@ -40,8 +40,8 @@ Aplicativo Shiny para monitoramento semanal de conjuntivites com interface moder
 
 O app pode carregar dados em 3 modos (`OFTALMO_DATA_MODE`):
 
-- `auto` (padrão): tenta MariaDB primeiro; se falhar, tenta JSON (quando configurado).
-- `db`: usa somente MariaDB.
+- `db` (padrão): usa somente MariaDB.
+- `auto`: tenta MariaDB primeiro; se falhar, tenta JSON (quando configurado).
 - `json`: usa somente JSON (arquivo local ou URL).
 
 ### Campos esperados da base
