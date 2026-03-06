@@ -61,13 +61,7 @@ ui <- tagList(
     ),
     div(
       class = "sp-gov-overlay",
-      div("Painel de Vigilância Epidemiológica", class = "sp-gov-overlay-title"),
-      div("Conjuntivites", class = "sp-gov-overlay-subtitle"),
-      div(
-        class = "sp-gov-overlay-menu",
-        span("Painel"),
-        span("Sobre")
-      )
+      "Painel de Vigilância Epidemiológica das Conjuntivites"
     )
   ),
   page_navbar(
@@ -102,40 +96,19 @@ ui <- tagList(
           }
           .sp-gov-overlay {
             position: absolute;
-            top: 16px;
-            right: 22px;
-            background: rgba(0, 45, 87, 0.62);
-            border: 1px solid rgba(255, 255, 255, 0.25);
-            border-radius: 12px;
-            padding: 10px 14px;
+            left: 22px;
+            bottom: 14px;
+            background: transparent;
+            border: none;
+            border-radius: 0;
+            padding: 0;
             color: #ffffff;
-            text-align: right;
-            backdrop-filter: blur(1px);
-          }
-          .sp-gov-overlay-title {
+            text-align: left;
             font-weight: 700;
-            font-size: 1.02rem;
+            font-size: 1.2rem;
             line-height: 1.1;
-            white-space: nowrap;
-          }
-          .sp-gov-overlay-subtitle {
-            font-size: 0.9rem;
-            opacity: 0.95;
-            margin-top: 2px;
-          }
-          .sp-gov-overlay-menu {
-            margin-top: 7px;
-            display: flex;
-            gap: 8px;
-            justify-content: flex-end;
-          }
-          .sp-gov-overlay-menu span {
-            display: inline-block;
-            padding: 2px 9px;
-            border-radius: 999px;
-            font-size: 0.78rem;
-            font-weight: 700;
-            background: rgba(255, 255, 255, 0.2);
+            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+            max-width: calc(100% - 44px);
           }
           .app-container {
             background: #f4f6f8;
@@ -224,19 +197,12 @@ ui <- tagList(
               height: auto;
             }
             .sp-gov-overlay {
-              top: 8px;
+              left: 10px;
+              bottom: 8px;
               right: 8px;
-              padding: 7px 10px;
-            }
-            .sp-gov-overlay-title {
-              font-size: 0.8rem;
-            }
-            .sp-gov-overlay-subtitle {
-              font-size: 0.74rem;
-            }
-            .sp-gov-overlay-menu span {
-              font-size: 0.68rem;
-              padding: 1px 7px;
+              padding: 0;
+              font-size: 0.85rem;
+              line-height: 1.2;
             }
           }
           "
