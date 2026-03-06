@@ -1180,31 +1180,14 @@ load_epidemiological_data <- function(
   )
 }
 
-data_mode <- tolower(trimws(Sys.getenv("OFTALMO_DATA_MODE", unset = "db")))
-if (!(data_mode %in% c("auto", "db", "json"))) {
-  data_mode <- "db"
-}
-
-json_path <- trimws(Sys.getenv("OFTALMO_JSON_PATH", unset = ""))
-json_url <- trimws(Sys.getenv("OFTALMO_JSON_URL", unset = ""))
-
 dados_epidemiologicos <- load_epidemiological_data(
-  prefer_db = data_mode %in% c("auto", "db"),
-  prefer_json = data_mode == "json",
-  enable_json = data_mode %in% c("auto", "json"),
-  json_path = json_path,
-  json_url = json_url
+  prefer_db = TRUE,
+  prefer_json = FALSE,
+  enable_json = FALSE,
+  json_path = "",
+  json_url = ""
 )
-dados_fonte <- attr(dados_epidemiologicos, "data_source")
-if (is.null(dados_fonte) || dados_fonte == "") {
-  dados_fonte <- if (data_mode == "json") {
-    "json"
-  } else if (data_mode == "db") {
-    "database"
-  } else {
-    "auto"
-  }
-}
+dados_fonte <- "database"
 
 get_gve_by_drs <- function(drs) {
   sort(unique(dados_epidemiologicos$gve[dados_epidemiologicos$drs == drs]))

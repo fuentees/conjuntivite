@@ -38,11 +38,7 @@ Aplicativo Shiny para monitoramento semanal de conjuntivites com interface moder
 
 ## Fonte de dados
 
-O app pode carregar dados em 3 modos (`OFTALMO_DATA_MODE`):
-
-- `db` (padrão): usa somente MariaDB.
-- `auto`: tenta MariaDB primeiro; se falhar, tenta JSON (quando configurado).
-- `json`: usa somente JSON (arquivo local ou URL).
+O app usa somente MariaDB como fonte de dados.
 
 ### Campos esperados da base
 
@@ -108,27 +104,21 @@ export OFTALMO_COL_MEDIDA_ADOTADA="nome_real_coluna_medida_adotada"
 export OFTALMO_COL_UNIDADE="nome_real_coluna_unidade_saude"
 ```
 
-Configuração de fonte JSON (útil para cloud sem acesso ao banco privado):
+Atualização automática dos dados:
 
 ```bash
-export OFTALMO_DATA_MODE="json"   # auto | db | json
-export OFTALMO_JSON_PATH="/caminho/oftalmo_snapshot.json"
-export OFTALMO_JSON_URL="https://seu-servidor/oftalmo_snapshot.json"
-export OFTALMO_JSON_RECENT_YEARS="8"   # opcional: limita anos mais recentes para reduzir memória
 export OFTALMO_REFRESH_MINUTES="5"     # opcional: recarrega dados periodicamente (0 desativa)
 ```
 
-> Quando `OFTALMO_DATA_MODE=json`, o app usa `OFTALMO_JSON_PATH` (se existir) e depois `OFTALMO_JSON_URL`.
-> Em ambientes com pouca memória (ex.: shinyapps.io), configure `OFTALMO_JSON_RECENT_YEARS` para reduzir consumo no startup.
 > Para atualizar automaticamente sem reiniciar a aplicação, use `OFTALMO_REFRESH_MINUTES` (padrão = 5 minutos).
-> Se DB/JSON não estiverem acessíveis, o app interrompe a inicialização (não há fallback com dados fictícios).
+> Se o banco não estiver acessível, o app interrompe a inicialização (não há fallback com dados fictícios).
 
 ## Instalação
 
 ```r
 install.packages(c(
   "shiny", "bslib", "dplyr", "plotly", "leaflet",
-  "lubridate", "tidyr", "DT", "DBI", "RMariaDB", "geobr", "sf", "jsonlite"
+  "lubridate", "tidyr", "DT", "DBI", "RMariaDB", "geobr", "sf"
 ))
 
 shiny::runApp(".")
@@ -136,40 +126,6 @@ shiny::runApp(".")
 
 > `geobr` e `sf` são recomendados para coroplético com polígonos.
 > Sem eles, o mapa funciona em modo de marcadores (sem polígonos).
-
-## Fluxo recomendado para shinyapps.io (banco privado)
-
-Quando o banco (`192.168.x.x`) não está acessível da internet:
-
-1. Rodar um script interno na rede do banco para exportar JSON.
-2. Publicar esse JSON em um local acessível (URL pública ou arquivo sincronizado).
-3. No shinyapps.io, usar `OFTALMO_DATA_MODE=json` + `OFTALMO_JSON_URL`.
-
-### Script de exportação JSON
-
-Arquivo: `functions/ExportOftalmoJson.R`
-
-Exemplo de execução:
-
-```bash
-Rscript functions/ExportOftalmoJson.R --output data/oftalmo_snapshot.json
-```
-
-Ou definindo variável:
-
-```bash
-export OFTALMO_JSON_EXPORT_PATH="data/oftalmo_snapshot.json"
-Rscript functions/ExportOftalmoJson.R
-```
-
-### Automação (agendamento)
-
-- **Windows (Agendador de Tarefas)**: criar tarefa para executar `Rscript.exe functions/ExportOftalmoJson.R` a cada 15 min.
-- **Linux (cron)** exemplo:
-
-```cron
-*/15 * * * * cd /caminho/projeto && /usr/bin/Rscript functions/ExportOftalmoJson.R --output data/oftalmo_snapshot.json
-```
 
 Para usar o banner oficial em imagem, basta adicionar:
 
@@ -211,10 +167,9 @@ Mais detalhes em `shapes/README.md`.
 project/
 ├── app.R
 ├── functions/
-│   ├── ConectDb.R         # conexão e consulta ao MariaDB
-│   └── ExportOftalmoJson.R # exporta snapshot JSON para uso em cloud
+│   └── ConectDb.R         # conexão e consulta ao MariaDB
 ├── R/
-│   ├── data.R         # ingestão (DB/JSON), transformação e utilitários
+│   ├── data.R         # ingestão (DB), transformação e utilitários
 │   ├── ui.R           # interface
 │   └── server.R       # reatividade, indicadores e gráficos
 ├── shapes/

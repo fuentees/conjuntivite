@@ -27,40 +27,18 @@ server <- function(input, output, session) {
     as.character(format(Sys.Date(), "%Y"))
   }
 
-  resolve_data_source_label <- function(df, mode) {
-    source_attr <- attr(df, "data_source")
-    if (!is.null(source_attr) && source_attr != "") {
-      return(as.character(source_attr))
-    }
-    if (identical(mode, "json")) {
-      return("json")
-    }
-    if (identical(mode, "db")) {
-      return("database")
-    }
-    "auto"
-  }
-
   load_dataset_runtime <- function() {
-    data_mode_runtime <- tolower(trimws(Sys.getenv("OFTALMO_DATA_MODE", unset = "db")))
-    if (!(data_mode_runtime %in% c("auto", "db", "json"))) {
-      data_mode_runtime <- "db"
-    }
-
-    json_path_runtime <- trimws(Sys.getenv("OFTALMO_JSON_PATH", unset = ""))
-    json_url_runtime <- trimws(Sys.getenv("OFTALMO_JSON_URL", unset = ""))
-
     dataset <- load_epidemiological_data(
-      prefer_db = data_mode_runtime %in% c("auto", "db"),
-      prefer_json = data_mode_runtime == "json",
-      enable_json = data_mode_runtime %in% c("auto", "json"),
-      json_path = json_path_runtime,
-      json_url = json_url_runtime
+      prefer_db = TRUE,
+      prefer_json = FALSE,
+      enable_json = FALSE,
+      json_path = "",
+      json_url = ""
     )
 
     list(
       data = dataset,
-      source = resolve_data_source_label(dataset, data_mode_runtime)
+      source = "database"
     )
   }
 
@@ -194,13 +172,7 @@ server <- function(input, output, session) {
 
   output$fonte_dados <- renderText({
     fonte_atual <- fonte_runtime()
-    fonte_texto <- if (identical(fonte_atual, "database")) {
-      "Fonte: Banco MariaDB"
-    } else if (identical(fonte_atual, "json")) {
-      "Fonte: JSON (arquivo/URL)"
-    } else {
-      paste0("Fonte: ", as.character(fonte_atual))
-    }
+    fonte_texto <- if (identical(fonte_atual, "database")) "Fonte: Banco MariaDB" else paste0("Fonte: ", as.character(fonte_atual))
     paste0(fonte_texto, " | Atualizado: ", format(ultima_atualizacao(), "%H:%M:%S"))
   })
 
