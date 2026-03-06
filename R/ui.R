@@ -93,10 +93,10 @@ ui <- tagList(
           }
           .sp-gov-banner-img {
             width: 100%;
-            height: 180px;
+            height: auto;
             max-height: none;
-            object-fit: cover;
-            object-position: center;
+            object-fit: unset;
+            object-position: initial;
             display: block;
           }
           .app-container {
@@ -183,7 +183,7 @@ ui <- tagList(
           }
           @media (max-width: 768px) {
             .sp-gov-banner-img {
-              height: 120px;
+              height: auto;
             }
           }
           "
