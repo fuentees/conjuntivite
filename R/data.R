@@ -486,6 +486,7 @@ parse_notification_date <- function(value) {
     parse_date_time(
       value,
       orders = c(
+        "Y-m-dTH:M:OSz", "Y-m-dTH:M:OS", "Y-m-dTH:M:Sz", "Y-m-dTH:M:S", "Y-m-dTH:M",
         "d/m/Y H:M:S", "d/m/Y H:M", "d/m/Y",
         "d/m/y H:M:S", "d/m/y H:M", "d/m/y",
         "Y-m-d H:M:S", "Y-m-d H:M", "Y-m-d",
@@ -745,6 +746,8 @@ prepare_oftalmo_dataset <- function(raw_data) {
       drs_codigo = sanitize_geo_code(drs_codigo),
       ano = dplyr::coalesce(ano_registro, year(data_notificacao)),
       semana = dplyr::coalesce(semana_registro, isoweek(data_notificacao)),
+      # Evita descartar registros com ano válido e semana ausente.
+      semana = ifelse(is.na(semana) & !is.na(ano), 1L, semana),
       semana = pmin(pmax(semana, 1), 53),
       populacao = ifelse(!is.finite(populacao) | populacao <= 0, NA_real_, populacao),
       surtos = surto_n + surto_flag,
@@ -760,7 +763,7 @@ prepare_oftalmo_dataset <- function(raw_data) {
       coleta_material = ifelse(is.na(coleta_material), 0, pmax(round(coleta_material), 0)),
       encaminhamentos = ifelse(is.na(encaminhamentos), 0, pmax(round(encaminhamentos), 0))
     ) %>%
-    filter(!is.na(ano), !is.na(semana)) %>%
+    filter(!is.na(ano)) %>%
     group_by(ano, semana, drs, drs_codigo, gve, gve_codigo, municipio, uvis, unidade_saude, populacao) %>%
     summarise(
       casos = sum(casos, na.rm = TRUE),
@@ -891,6 +894,7 @@ normalize_internal_oftalmo_dataset <- function(df, aggregate = TRUE) {
     mutate(
       ano = suppressWarnings(as.integer(ano)),
       semana = suppressWarnings(as.integer(semana)),
+      semana = ifelse(is.na(semana) & !is.na(ano), 1L, semana),
       semana = pmin(pmax(semana, 1), 53),
       drs = sanitize_dimension_values(drs),
       drs_codigo = sanitize_geo_code(drs_codigo),
@@ -916,7 +920,7 @@ normalize_internal_oftalmo_dataset <- function(df, aggregate = TRUE) {
       coleta_material = ifelse(is.na(coleta_material), 0, pmax(round(sanitize_numeric_values(coleta_material, default = 0)), 0)),
       encaminhamentos = ifelse(is.na(encaminhamentos), 0, pmax(round(sanitize_numeric_values(encaminhamentos, default = 0)), 0))
     ) %>%
-    filter(!is.na(ano), !is.na(semana))
+    filter(!is.na(ano))
 
   if (isTRUE(aggregate)) {
     df <- df %>%
