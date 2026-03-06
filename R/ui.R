@@ -58,21 +58,21 @@ ui <- tagList(
       src = banner_topo_src,
       class = "sp-gov-banner-img",
       alt = "Banner institucional da Secretaria de Estado da Saúde de São Paulo"
+    ),
+    div(
+      class = "sp-gov-overlay",
+      div("Painel de Vigilância Epidemiológica", class = "sp-gov-overlay-title"),
+      div("Conjuntivites", class = "sp-gov-overlay-subtitle"),
+      div(
+        class = "sp-gov-overlay-menu",
+        span("Painel"),
+        span("Sobre")
+      )
     )
   ),
   page_navbar(
     theme = custom_theme,
-    title = div(
-      class = "d-flex align-items-center gap-2",
-      div(
-        style = "width: 38px; height: 38px; border-radius: 10px; background: linear-gradient(135deg, #005ca9, #1976d2); display:flex; align-items:center; justify-content:center;",
-        icon("eye", style = "color: white;")
-      ),
-      div(
-        div("Painel de Vigilância Epidemiológica", style = "font-weight: 700; line-height: 1.1;"),
-        tags$small("Conjuntivites", class = "text-muted")
-      )
-    ),
+    title = NULL,
     navbar_options = navbar_options(
       bg = "#ffffff",
       theme = "light",
@@ -90,6 +90,7 @@ ui <- tagList(
             justify-content: center;
             border-bottom: 1px solid rgba(255, 255, 255, 0.1);
             overflow: hidden;
+            position: relative;
           }
           .sp-gov-banner-img {
             width: 100%;
@@ -98,6 +99,43 @@ ui <- tagList(
             object-fit: unset;
             object-position: initial;
             display: block;
+          }
+          .sp-gov-overlay {
+            position: absolute;
+            top: 16px;
+            right: 22px;
+            background: rgba(0, 45, 87, 0.62);
+            border: 1px solid rgba(255, 255, 255, 0.25);
+            border-radius: 12px;
+            padding: 10px 14px;
+            color: #ffffff;
+            text-align: right;
+            backdrop-filter: blur(1px);
+          }
+          .sp-gov-overlay-title {
+            font-weight: 700;
+            font-size: 1.02rem;
+            line-height: 1.1;
+            white-space: nowrap;
+          }
+          .sp-gov-overlay-subtitle {
+            font-size: 0.9rem;
+            opacity: 0.95;
+            margin-top: 2px;
+          }
+          .sp-gov-overlay-menu {
+            margin-top: 7px;
+            display: flex;
+            gap: 8px;
+            justify-content: flex-end;
+          }
+          .sp-gov-overlay-menu span {
+            display: inline-block;
+            padding: 2px 9px;
+            border-radius: 999px;
+            font-size: 0.78rem;
+            font-weight: 700;
+            background: rgba(255, 255, 255, 0.2);
           }
           .app-container {
             background: #f4f6f8;
@@ -184,6 +222,21 @@ ui <- tagList(
           @media (max-width: 768px) {
             .sp-gov-banner-img {
               height: auto;
+            }
+            .sp-gov-overlay {
+              top: 8px;
+              right: 8px;
+              padding: 7px 10px;
+            }
+            .sp-gov-overlay-title {
+              font-size: 0.8rem;
+            }
+            .sp-gov-overlay-subtitle {
+              font-size: 0.74rem;
+            }
+            .sp-gov-overlay-menu span {
+              font-size: 0.68rem;
+              padding: 1px 7px;
             }
           }
           "
