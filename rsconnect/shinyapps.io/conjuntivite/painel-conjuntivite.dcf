@@ -1,0 +1,10 @@
+name: painel-conjuntivite
+title:
+username: conjuntivite
+account: conjuntivite
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 16774634
+bundleId: 11636078
+url: https://conjuntivite.shinyapps.io/painel-conjuntivite/
+version: 1

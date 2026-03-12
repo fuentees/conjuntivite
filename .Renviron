@@ -1,0 +1,3 @@
+OFTALMO_DATA_MODE=json
+OFTALMO_JSON_PATH=data/oftalmo_snapshot.json
+OFTALMO_ALLOW_MOCK=false

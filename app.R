@@ -5,6 +5,7 @@ library(plotly)
 library(leaflet)
 library(lubridate)
 library(tidyr)
+library(rsconnect)
 
 source("R/data.R")
 source("R/ui.R")
