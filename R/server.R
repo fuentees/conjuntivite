@@ -605,6 +605,37 @@ server <- function(input, output, session) {
     }
   })
 
+  output$total_encaminhamentos <- renderText({
+    df <- dados_contexto_periodo()
+    total_encaminhamentos <- sum(df$encaminhamentos, na.rm = TRUE)
+    if (!is.finite(total_encaminhamentos)) {
+      total_encaminhamentos <- 0
+    }
+    format(as.integer(round(total_encaminhamentos)), big.mark = ".", decimal.mark = ",")
+  })
+
+  output$total_encaminhamentos_subtitulo <- renderText({
+    df <- dados_contexto_periodo()
+    total_encaminhamentos <- sum(df$encaminhamentos, na.rm = TRUE)
+    total_acoes <- sum(
+      df$acao_educativa,
+      df$treinamentos,
+      df$coleta_material,
+      df$encaminhamentos,
+      na.rm = TRUE
+    )
+
+    if (!is.finite(total_encaminhamentos)) {
+      total_encaminhamentos <- 0
+    }
+    if (!is.finite(total_acoes) || total_acoes <= 0) {
+      return("Participação: 0,0%")
+    }
+
+    participacao <- (total_encaminhamentos / total_acoes) * 100
+    paste0("Participação no total: ", format(round(participacao, 1), decimal.mark = ","), "%")
+  })
+
   output$situacao_epidemiologica <- renderText({
     situacao_data()$status
   })
@@ -1616,35 +1647,50 @@ server <- function(input, output, session) {
     }
 
     acoes_df <- tibble::tibble(
-      acao = c("Ações educativas", "Treinamentos", "Coleta de material", "Encaminhamentos"),
+      acao = c("Ações educativas", "Treinamentos", "Coleta de material"),
       quantidade = c(
         sum(df$acao_educativa, na.rm = TRUE),
         sum(df$treinamentos, na.rm = TRUE),
-        sum(df$coleta_material, na.rm = TRUE),
-        sum(df$encaminhamentos, na.rm = TRUE)
+        sum(df$coleta_material, na.rm = TRUE)
       )
-    )
+    ) %>%
+      mutate(acao = reorder(acao, quantidade))
 
     if (sum(acoes_df$quantidade, na.rm = TRUE) <= 0) {
-      return(empty_plotly("Sem registros de ações no período selecionado"))
+      return(empty_plotly("Sem registros de ações (exceto encaminhamentos) no período selecionado"))
     }
 
     plot_ly(
       acoes_df,
-      x = ~reorder(acao, quantidade),
+      x = ~acao,
       y = ~quantidade,
       type = "bar",
       orientation = "v",
-      marker = list(color = c("#43a047", "#00897b", "#7cb342", "#5e35b1")),
+      text = ~format(as.integer(round(quantidade)), big.mark = ".", decimal.mark = ","),
+      textposition = "outside",
+      marker = list(color = c("#43a047", "#00897b", "#7cb342")),
       name = "Quantidade"
     ) %>%
       layout(
         showlegend = FALSE,
-        margin = list(l = 55, r = 20, t = 10, b = 90),
+        margin = list(l = 55, r = 20, t = 25, b = 90),
         plot_bgcolor = "rgba(245,245,245,0.5)",
         paper_bgcolor = "white",
         xaxis = list(title = "Tipo de ação", tickangle = 20, showgrid = FALSE),
-        yaxis = list(title = "Quantidade", showgrid = TRUE, gridcolor = "#e5e7eb")
+        yaxis = list(title = "Quantidade", showgrid = TRUE, gridcolor = "#e5e7eb"),
+        annotations = list(
+          list(
+            x = 0.01,
+            y = 1.12,
+            xref = "paper",
+            yref = "paper",
+            xanchor = "left",
+            yanchor = "bottom",
+            text = "Comparativo entre ações (exclui encaminhamentos)",
+            showarrow = FALSE,
+            font = list(size = 11, color = "#52606d")
+          )
+        )
       )
   })
 
