@@ -537,23 +537,17 @@ prepare_oftalmo_dataset <- function(raw_data) {
     return(NULL)
   }
 
-  date_col <- pick_column_with_override(
-    raw_data,
-    override_env_var = "OFTALMO_COL_DATA",
-    candidates = c("DtNotificacao", "dt_notificacao", "data_notificacao", "created_at", "DtUpdate"),
-    regex_candidates = c("^dt.*not", "^data.*not")
-  )
   ano_col <- pick_column_with_override(
     raw_data,
     override_env_var = "OFTALMO_COL_ANO",
-    candidates = c("ANO", "ano", "Ano", "AnoNotificacao", "ano_notificacao"),
-    regex_candidates = c("^ano$", "ano.*not", "year")
+    candidates = c("ANO", "ano", "Ano"),
+    regex_candidates = c("^ano$")
   )
   semana_col <- pick_column_with_override(
     raw_data,
     override_env_var = "OFTALMO_COL_SEMANA",
-    candidates = c("SemEpidemio", "semepidemio", "semana", "Semana", "SE", "SemanaEpidemiologica", "semana_epidemiologica"),
-    regex_candidates = c("^semana$", "semana.*epi", "^se$", "semepid")
+    candidates = c("SemEpidemio", "semepidemio"),
+    regex_candidates = c("^semepidemio$")
   )
   municipio_col <- pick_column_with_override(
     raw_data,
@@ -705,6 +699,8 @@ prepare_oftalmo_dataset <- function(raw_data) {
   )
 
   missing_columns <- character()
+  if (is.null(ano_col)) missing_columns <- c(missing_columns, "ANO")
+  if (is.null(semana_col)) missing_columns <- c(missing_columns, "SemEpidemio")
   if (is.null(municipio_col)) missing_columns <- c(missing_columns, "MunicipioNotificacao")
   if (is.null(gve_col)) missing_columns <- c(missing_columns, "dominio_gve")
   if (is.null(casos_col)) missing_columns <- c(missing_columns, "TotalCaso")
@@ -717,16 +713,16 @@ prepare_oftalmo_dataset <- function(raw_data) {
         paste(missing_columns, collapse = ", "),
         ". Verifique os nomes reais no banco. ",
         "Colunas disponíveis: ", cols_preview, ". ",
-        "Se necessário, configure OFTALMO_COL_GVE/OFTALMO_COL_MUNICIPIO/OFTALMO_COL_CASOS."
+        "Se necessário, configure OFTALMO_COL_ANO/OFTALMO_COL_SEMANA/",
+        "OFTALMO_COL_GVE/OFTALMO_COL_MUNICIPIO/OFTALMO_COL_CASOS."
       )
     )
   }
 
   df <- raw_data %>%
     mutate(
-      data_notificacao = if (!is.null(date_col)) parse_notification_date(.data[[date_col]]) else as.Date(NA),
-      ano_registro = if (!is.null(ano_col)) suppressWarnings(as.integer(.data[[ano_col]])) else NA_integer_,
-      semana_registro = if (!is.null(semana_col)) suppressWarnings(as.integer(.data[[semana_col]])) else NA_integer_,
+      ano_registro = suppressWarnings(as.integer(.data[[ano_col]])),
+      semana_registro = suppressWarnings(as.integer(.data[[semana_col]])),
       municipio = sanitize_dimension_values(.data[[municipio_col]]),
       gve = sanitize_dimension_values(.data[[gve_col]]),
       gve_codigo = if (!is.null(gve_code_col)) sanitize_geo_code(.data[[gve_code_col]]) else NA_character_,
@@ -775,10 +771,8 @@ prepare_oftalmo_dataset <- function(raw_data) {
     mutate(
       gve_codigo = sanitize_geo_code(gve_codigo),
       drs_codigo = sanitize_geo_code(drs_codigo),
-      ano = dplyr::coalesce(ano_registro, year(data_notificacao)),
-      semana = dplyr::coalesce(semana_registro, isoweek(data_notificacao)),
-      # Evita descartar registros com ano válido e semana ausente.
-      semana = ifelse(is.na(semana) & !is.na(ano), 1L, semana),
+      ano = ano_registro,
+      semana = semana_registro,
       semana = pmin(pmax(semana, 1), 53),
       populacao = ifelse(!is.finite(populacao) | populacao <= 0, NA_real_, populacao),
       surtos = surto_n + surto_flag,
@@ -794,7 +788,7 @@ prepare_oftalmo_dataset <- function(raw_data) {
       coleta_material = ifelse(is.na(coleta_material), 0, pmax(round(coleta_material), 0)),
       encaminhamentos = ifelse(is.na(encaminhamentos), 0, pmax(round(encaminhamentos), 0))
     ) %>%
-    filter(!is.na(ano)) %>%
+    filter(!is.na(ano), !is.na(semana)) %>%
     group_by(ano, semana, drs, drs_codigo, gve, gve_codigo, municipio, uvis, unidade_saude, populacao) %>%
     summarise(
       casos = sum(casos, na.rm = TRUE),
@@ -925,7 +919,6 @@ normalize_internal_oftalmo_dataset <- function(df, aggregate = TRUE) {
     mutate(
       ano = suppressWarnings(as.integer(ano)),
       semana = suppressWarnings(as.integer(semana)),
-      semana = ifelse(is.na(semana) & !is.na(ano), 1L, semana),
       semana = pmin(pmax(semana, 1), 53),
       drs = sanitize_dimension_values(drs),
       drs_codigo = sanitize_geo_code(drs_codigo),
@@ -951,7 +944,7 @@ normalize_internal_oftalmo_dataset <- function(df, aggregate = TRUE) {
       coleta_material = ifelse(is.na(coleta_material), 0, pmax(round(sanitize_numeric_values(coleta_material, default = 0)), 0)),
       encaminhamentos = ifelse(is.na(encaminhamentos), 0, pmax(round(sanitize_numeric_values(encaminhamentos, default = 0)), 0))
     ) %>%
-    filter(!is.na(ano))
+    filter(!is.na(ano), !is.na(semana))
 
   if (isTRUE(aggregate)) {
     df <- df %>%
