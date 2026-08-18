@@ -391,9 +391,21 @@ ui <- tagList(
             plotlyOutput("grafico_faixa_etaria", height = "320px"),
             full_screen = TRUE
           ),
+          value_box(
+            title = "Encaminhamentos",
+            value = textOutput("total_encaminhamentos"),
+            subtitle = textOutput("total_encaminhamentos_subtitulo"),
+            showcase = icon("arrow-up-right-dots"),
+            theme = "purple",
+            class = "h-100"
+          )
+        ),
+        br(),
+        layout_columns(
+          col_widths = c(12),
           card(
             class = "custom-card",
-            card_header("Ações e treinamentos realizados"),
+            card_header("Ações e treinamentos realizados (exclui encaminhamentos)"),
             plotlyOutput("grafico_acoes_treinamentos", height = "320px"),
             full_screen = TRUE
           )
