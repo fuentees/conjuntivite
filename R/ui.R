@@ -263,7 +263,20 @@ ui <- tagList(
                 )
               )
             ),
-            uiOutput("uvis_filter_ui"),
+            layout_columns(
+              col_widths = c(5, 7),
+              sliderInput(
+                "filtro_semanas",
+                label = "Semanas epidemiológicas",
+                min = 1,
+                max = 53,
+                value = c(1, 53),
+                step = 1,
+                ticks = FALSE,
+                width = "100%"
+              ),
+              uiOutput("uvis_filter_ui")
+            ),
             div(
               class = "d-flex justify-content-end mt-1",
               span(textOutput("fonte_dados", inline = TRUE), class = "text-chip")
@@ -342,8 +355,31 @@ ui <- tagList(
           col_widths = c(12),
           card(
             class = "custom-card",
-            card_header(textOutput("titulo_grafico_casos_territorio", inline = TRUE)),
-            plotlyOutput("grafico_casos_gve", height = "350px"),
+            card_header(
+              class = "d-flex flex-wrap justify-content-between align-items-center gap-2",
+              textOutput("titulo_grafico_casos_territorio", inline = TRUE),
+              div(
+                class = "d-flex flex-wrap gap-3 small",
+                conditionalPanel(
+                  condition = "input.filtro_gve == 'Todas' && input.filtro_municipio == 'Todos'",
+                  radioButtons(
+                    "agrupar_territorio",
+                    label = NULL,
+                    choices = c("Por GVE" = "gve", "Por DRS" = "drs", "Por município" = "municipio"),
+                    selected = "gve",
+                    inline = TRUE
+                  )
+                ),
+                radioButtons(
+                  "metrica_territorio",
+                  label = NULL,
+                  choices = c("Incidência" = "incidencia", "Casos" = "casos"),
+                  selected = "incidencia",
+                  inline = TRUE
+                )
+              )
+            ),
+            plotlyOutput("grafico_casos_gve", height = "420px"),
             full_screen = TRUE
           )
         ),
@@ -389,6 +425,22 @@ ui <- tagList(
             ),
             full_screen = TRUE
           )
+        ),
+        br(),
+        card(
+          class = "custom-card",
+          card_header(textOutput("titulo_silencio", inline = TRUE)),
+          card_body(
+            fillable = FALSE,
+            uiOutput("resumo_silencio"),
+            DT::DTOutput("tabela_silencio"),
+            tags$small(
+              class = "legend-note d-block mt-2",
+              "Conta como notificação qualquer registro do município na semana, inclusive notificação negativa (zero casos). ",
+              "A situação vale para a semana mais recente da base e não depende do filtro de ano."
+            )
+          ),
+          full_screen = TRUE
         ),
         br(),
         layout_columns(
@@ -468,6 +520,21 @@ ui <- tagList(
             tags$li(
               tags$strong("Tendência: "),
               "suavização LOESS das semanas observadas e projeção linear das 8 semanas seguintes, limitada ao fim do ano epidemiológico."
+            ),
+            tags$li(
+              tags$strong("Filtro de semanas: "),
+              "restringe cards, tabela, mapa, ranking e perfil às semanas escolhidas. Série, canal endêmico e tendência ",
+              "continuam mostrando o ano inteiro, com as semanas escolhidas destacadas."
+            ),
+            tags$li(
+              tags$strong("Ranking de territórios: "),
+              "compara GVE, DRS ou municípios por incidência (padrão) ou por casos. A incidência evita que regiões grandes ",
+              "pareçam piores só por terem mais habitantes."
+            ),
+            tags$li(
+              tags$strong("Silêncio epidemiológico: "),
+              "semanas desde a última notificação de cada município do território, contadas a partir da semana mais recente da base. ",
+              "Inclui os municípios que nunca notificaram."
             ),
             tags$li(
               tags$strong("Semana epidemiológica: "),

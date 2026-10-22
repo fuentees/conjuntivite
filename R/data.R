@@ -1091,6 +1091,33 @@ load_populacao_ibge <- local({
   }
 })
 
+# Municípios de SP com GVE e DRS (pela malha estadual), inclusive os que nunca notificaram.
+load_municipios_referencia <- local({
+  cached <- NULL
+
+  function() {
+    if (!is.null(cached)) {
+      return(cached)
+    }
+    path <- file.path("data", "municipios_sp.csv")
+    if (!file.exists(path)) {
+      return(NULL)
+    }
+    cached <<- tibble::as_tibble(utils::read.csv(
+      path,
+      stringsAsFactors = FALSE,
+      encoding = "UTF-8",
+      colClasses = c(cod_ibge = "character")
+    ))
+    cached
+  }
+})
+
+# Data de início (domingo) de uma semana epidemiológica.
+inicio_semana_epidemiologica <- function(ano, semana) {
+  inicio_ano_epidemiologico(ano) + 7 * (as.integer(semana) - 1L)
+}
+
 normalize_municipio_chave <- function(municipio) {
   chave <- normalize_key(municipio)
   idx <- match(chave, names(municipio_aliases))
