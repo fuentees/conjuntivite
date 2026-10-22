@@ -38,6 +38,7 @@ custom_theme <- bs_theme(
 )
 
 anos_disponiveis <- sort(unique(dados_epidemiologicos$ano), decreasing = TRUE)
+canal_excluidos_padrao <- Sys.getenv("OFTALMO_CANAL_ANOS_EXCLUIDOS", unset = "2011,2020,2021")
 if (length(anos_disponiveis) == 0) {
   anos_disponiveis <- year(Sys.Date())
 }
@@ -182,6 +183,12 @@ ui <- tagList(
             color: #005ca9;
             font-weight: 600;
           }
+          .value-box-subtitle {
+            display: block;
+            font-size: 0.78rem;
+            opacity: 0.9;
+            line-height: 1.25;
+          }
           .legend-note {
             font-size: 0.82rem;
             color: #52606d;
@@ -215,6 +222,7 @@ ui <- tagList(
       class = "app-container",
       div(
         class = "container-fluid pt-3",
+        uiOutput("aviso_carga"),
         card(
           class = "filter-card mb-3",
           card_body(
@@ -267,6 +275,7 @@ ui <- tagList(
           value_box(
             title = "Total de casos",
             value = textOutput("total_casos"),
+            tags$small(class = "value-box-subtitle", textOutput("total_casos_subtitulo", inline = TRUE)),
             showcase = icon("users"),
             theme = "primary",
             class = "h-100"
@@ -274,7 +283,7 @@ ui <- tagList(
           value_box(
             title = "Incidência",
             value = textOutput("incidencia_media"),
-            subtitle = "Casos por 100 mil hab.",
+            tags$small(class = "value-box-subtitle", textOutput("incidencia_subtitulo", inline = TRUE)),
             showcase = icon("wave-square"),
             theme = "info",
             class = "h-100"
@@ -282,7 +291,7 @@ ui <- tagList(
           value_box(
             title = "Número de surtos",
             value = textOutput("num_surtos"),
-            subtitle = textOutput("num_surtos_subtitulo"),
+            tags$small(class = "value-box-subtitle", textOutput("num_surtos_subtitulo", inline = TRUE)),
             showcase = icon("triangle-exclamation"),
             theme = "warning",
             class = "h-100"
@@ -290,7 +299,7 @@ ui <- tagList(
           value_box(
             title = "Situação epidemiológica",
             value = textOutput("situacao_epidemiologica"),
-            subtitle = textOutput("situacao_descricao"),
+            tags$small(class = "value-box-subtitle", textOutput("situacao_descricao", inline = TRUE)),
             showcase = icon("circle-exclamation"),
             theme = "danger",
             class = "h-100"
@@ -301,13 +310,13 @@ ui <- tagList(
           col_widths = c(6, 6),
           card(
             class = "custom-card",
-            card_header("Série temporal — casos por semana epidemiológica (barras)"),
+            card_header(textOutput("titulo_serie_temporal", inline = TRUE)),
             plotlyOutput("grafico_serie_temporal", height = "360px"),
             full_screen = TRUE
           ),
           card(
             class = "custom-card",
-            card_header("Canal endêmico"),
+            card_header(textOutput("titulo_canal_endemico", inline = TRUE)),
             plotlyOutput("grafico_canal_endemico", height = "360px"),
             full_screen = TRUE
           )
@@ -317,13 +326,13 @@ ui <- tagList(
           col_widths = c(6, 6),
           card(
             class = "custom-card",
-            card_header("Modelo de tendência semanal (projeção curta)"),
+            card_header("Tendência semanal e projeção de 8 semanas"),
             plotlyOutput("grafico_tendencia", height = "350px"),
             full_screen = TRUE
           ),
           card(
             class = "custom-card",
-            card_header("Motor de alerta preditivo de surtos (IA)"),
+            card_header("Índice de risco de surto (heurístico)"),
             plotlyOutput("grafico_alerta_ia", height = "350px"),
             full_screen = TRUE
           )
@@ -343,8 +352,13 @@ ui <- tagList(
           col_widths = c(7, 5),
           card(
             class = "custom-card",
-            card_header(textOutput("titulo_tabela_operacional", inline = TRUE)),
+            card_header(
+              class = "d-flex justify-content-between align-items-center",
+              textOutput("titulo_tabela_operacional", inline = TRUE),
+              downloadButton("baixar_tabela", "Baixar CSV", class = "btn-sm btn-outline-primary")
+            ),
             card_body(
+              fillable = FALSE,
               DT::DTOutput("tabela_municipios"),
               uiOutput("legenda_tabela_operacional")
             ),
@@ -370,7 +384,7 @@ ui <- tagList(
               leafletOutput("mapa", height = "470px"),
               tags$small(
                 class = "legend-note d-block mt-2",
-                "Legenda mapa: tons mais escuros indicam maior incidência. Clique no município para aplicar filtro automático."
+                "Tons mais escuros indicam maior incidência no período. Clique em uma área para filtrar o painel por ela."
               )
             ),
             full_screen = TRUE
@@ -407,22 +421,64 @@ ui <- tagList(
       class = "container-fluid py-3",
       card(
         class = "custom-card",
-        card_header("Sobre o sistema"),
+        card_header("Sobre o painel e metodologia"),
         card_body(
-          HTML(
-            "
-            <h5>Painel de Vigilância Epidemiológica de Conjuntivites</h5>
-            <p class='mb-2'>
-              Sistema com foco em monitoramento semanal e suporte à decisão com indicadores,
-              canal endêmico, tendência preditiva e mapa interativo.
-            </p>
-            <ul>
-              <li><strong>Filtros encadeados:</strong> Ano, DRS, GVE e Município.</li>
-              <li><strong>Dados:</strong> integração direta com MariaDB.</li>
-              <li><strong>Análises:</strong> série temporal, canal endêmico, tendência e alerta preditivo de surtos.</li>
-              <li><strong>Painel operacional:</strong> sexo, faixa etária, ações/treinamentos e tabela de municípios com alerta visual.</li>
-            </ul>
-            "
+          tags$h5("Painel de Vigilância Epidemiológica das Conjuntivites"),
+          tags$p(
+            "Monitoramento semanal das notificações de conjuntivite no estado de São Paulo, ",
+            "por DRS, GVE, município e unidade de saúde."
+          ),
+          tags$h6(class = "mt-3", "Fontes"),
+          tags$ul(
+            tags$li(tags$strong("Casos, surtos e ações: "), "base de notificação de oftalmologia (MariaDB), atualizada automaticamente a cada 5 minutos."),
+            tags$li(
+              tags$strong("População: "),
+              "IBGE por município e ano: Contagem 2007, Censos 2010 e 2022, estimativas anuais (SIDRA 6579), ",
+              "população TCU 2023 e estimativas 2024 e 2025. Anos sem dado do IBGE usam o ano mais próximo (ex.: 2026 usa 2025)."
+            ),
+            tags$li(tags$strong("Malhas: "), "municípios do IBGE, GVE da SES-SP e DRS formadas pela união das GVE.")
+          ),
+          tags$h6(class = "mt-3", "Indicadores"),
+          tags$ul(
+            tags$li(
+              tags$strong("Incidência: "),
+              "casos ÷ população × 100 mil. O denominador soma a população dos municípios do território filtrado que notificam nesta base. ",
+              "Com o ano selecionado, é a incidência acumulada até a última semana com dados. Com \"Todos\", é a média anual do período."
+            ),
+            tags$li(
+              tags$strong("Canal endêmico: "),
+              paste0(
+                "método dos quartis. Para cada semana epidemiológica, calcula o 1º quartil, a mediana e o 3º quartil dos casos ",
+                "nos até 10 anos anteriores ao ano selecionado, sem os anos atípicos (",
+                gsub(",", ", ", canal_excluidos_padrao, fixed = TRUE), "). ",
+                "2011 teve um surto excepcional na capital e 2020–2021 tiveram queda de notificações na pandemia."
+              )
+            ),
+            tags$li(
+              tags$strong("Situação epidemiológica: "),
+              "compara a média das últimas 4 semanas com o canal endêmico. Acima do 3º quartil = Epidemia; ",
+              "acima da mediana = Alerta; até a mediana = Normal. A semana mais recente fica de fora no ano corrente, ",
+              "porque ainda recebe notificações em atraso."
+            ),
+            tags$li(
+              tags$strong("Índice de risco de surto: "),
+              "indicador heurístico (não é um modelo treinado). Combina o quanto os casos da semana se afastam da média histórica ",
+              "(z-score) com o crescimento da média móvel de 4 semanas, numa escala de 0 a 100%. Acima de 70% indica risco alto."
+            ),
+            tags$li(
+              tags$strong("Tendência: "),
+              "suavização LOESS das semanas observadas e projeção linear das 8 semanas seguintes, limitada ao fim do ano epidemiológico."
+            ),
+            tags$li(
+              tags$strong("Semana epidemiológica: "),
+              "de domingo a sábado. A SE 1 é a primeira semana com pelo menos 4 dias no ano; alguns anos têm 53 semanas."
+            )
+          ),
+          tags$h6(class = "mt-3", "Limitações dos dados"),
+          tags$ul(
+            tags$li("Alguns municípios não têm nenhuma notificação nesta base e aparecem como \"Sem notificação\" no mapa."),
+            tags$li("Sexo, faixa etária, surtos e ações só são registrados nas notificações mais recentes. Os gráficos mostram a porcentagem de casos com o campo preenchido."),
+            tags$li("A incidência por UVIS não é calculada, porque o IBGE não publica população por UVIS.")
           )
         )
       )
@@ -430,7 +486,7 @@ ui <- tagList(
     ),
     footer = div(
       class = "text-center text-muted py-3 border-top small",
-      "Secretaria de Saúde - Vigilância Epidemiológica | Desenvolvido com Shiny"
+      "Secretaria de Estado da Saúde de São Paulo · Vigilância Epidemiológica · População: IBGE"
     )
   )
 )

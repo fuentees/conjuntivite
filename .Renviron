@@ -1,3 +1,8 @@
-OFTALMO_DATA_MODE=json
-OFTALMO_JSON_PATH=data/oftalmo_snapshot.json
-OFTALMO_ALLOW_MOCK=false
+# Variáveis opcionais do painel (descomente para usar).
+# Intervalo de atualização automática dos dados, em minutos (padrão 5):
+# OFTALMO_REFRESH_MINUTES=5
+# Anos fora do canal endêmico (padrão 2011,2020,2021) e janela de anos históricos (padrão 10):
+# OFTALMO_CANAL_ANOS_EXCLUIDOS=2011,2020,2021
+# OFTALMO_CANAL_JANELA=10
+# Coluna do banco com o código IBGE do município, se existir:
+# OFTALMO_COL_COD_IBGE=

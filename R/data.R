@@ -9,11 +9,18 @@ if (file.exists("functions/ConectDb.R")) {
   )
 }
 
+# Remove acentos de forma explícita: iconv(..., "ASCII//TRANSLIT") dá resultados
+# diferentes no Windows, Linux e macOS e quebrava o casamento de nomes.
+acentos_origem <- "\u00E1\u00E0\u00E2\u00E3\u00E4\u00E9\u00E8\u00EA\u00EB\u00ED\u00EC\u00EE\u00EF\u00F3\u00F2\u00F4\u00F5\u00F6\u00FA\u00F9\u00FB\u00FC\u00E7\u00F1\u00C1\u00C0\u00C2\u00C3\u00C4\u00C9\u00C8\u00CA\u00CB\u00CD\u00CC\u00CE\u00CF\u00D3\u00D2\u00D4\u00D5\u00D6\u00DA\u00D9\u00DB\u00DC\u00C7\u00D1"
+acentos_destino <- "aaaaaeeeeiiiiooooouuuucnAAAAAEEEEIIIIOOOOOUUUUCN"
+
 normalize_key <- function(x) {
-  x <- trimws(as.character(x))
+  x <- enc2utf8(trimws(as.character(x)))
   x <- ifelse(is.na(x), "", x)
-  x <- iconv(x, from = "", to = "ASCII//TRANSLIT")
-  x <- tolower(gsub("[^a-z0-9]+", " ", x))
+  x <- chartr(acentos_origem, acentos_destino, x)
+  x <- iconv(x, from = "UTF-8", to = "ASCII", sub = "")
+  x <- ifelse(is.na(x), "", x)
+  x <- gsub("[^a-z0-9]+", " ", tolower(x))
   trimws(x)
 }
 
@@ -183,6 +190,10 @@ map_drs_from_gve <- function(gve, drs_raw = NULL) {
   drs_from_gve
 }
 
+# ---------------------------------------------------------------------------
+# Malhas do mapa
+# ---------------------------------------------------------------------------
+
 shape_file_envvars <- c(
   municipio = "MAPA_SHAPE_MUNICIPIO",
   gve = "MAPA_SHAPE_GVE",
@@ -190,200 +201,23 @@ shape_file_envvars <- c(
 )
 
 shape_default_paths <- c(
-  municipio = file.path("shapes", "municipio", "municipio.shp"),
-  gve = file.path("shapes", "gve", "gve.shp"),
+  municipio = file.path("shapes", "municipio", "municipios_sp.shp"),
+  gve = file.path("shapes", "gve", "GVE.shp"),
   drs = file.path("shapes", "drs", "drs.shp")
 )
 
-shape_level_tokens <- function(level = c("municipio", "gve", "drs")) {
-  level <- match.arg(level)
-
-  switch(
-    level,
-    municipio = c("municipio", "muni", "ibge", "cidade"),
-    gve = c("gve", "grupo", "vigilancia"),
-    drs = c("drs", "diretoria", "regional", "saude")
-  )
-}
+# Coluna com o nome (ou código) da área em cada malha.
+shape_key_columns <- c(
+  municipio = "CD_MUN",
+  gve = "GVE",
+  drs = "DRS"
+)
 
 find_shape_file <- function(level = c("municipio", "gve", "drs")) {
   level <- match.arg(level)
-  env_name <- unname(shape_file_envvars[level])
-  configured_path <- trimws(Sys.getenv(env_name, unset = ""))
-  default_path <- unname(shape_default_paths[level])
-  default_dir <- dirname(default_path)
-
-  normalize_existing_path <- function(path) {
-    if (is.null(path) || path == "" || !file.exists(path)) {
-      return(path)
-    }
-    normalizePath(path, winslash = "/", mustWork = FALSE)
-  }
-
-  collect_shape_files <- function(path_candidate, recursive = FALSE) {
-    if (is.null(path_candidate) || path_candidate == "") {
-      return(character())
-    }
-
-    path_candidate <- trimws(path_candidate)
-    if (path_candidate == "") {
-      return(character())
-    }
-
-    if (file.exists(path_candidate) &&
-      !dir.exists(path_candidate) &&
-      grepl("\\.shp$", path_candidate, ignore.case = TRUE)) {
-      return(path_candidate)
-    }
-
-    if (!file.exists(path_candidate) && !grepl("\\.shp$", path_candidate, ignore.case = TRUE)) {
-      with_ext <- paste0(path_candidate, ".shp")
-      if (file.exists(with_ext)) {
-        return(with_ext)
-      }
-    }
-
-    if (dir.exists(path_candidate)) {
-      return(
-        list.files(
-          path = path_candidate,
-          pattern = "\\.shp$",
-          full.names = TRUE,
-          recursive = recursive,
-          ignore.case = TRUE
-        )
-      )
-    }
-
-    character()
-  }
-
-  candidate_files <- character()
-  candidate_files <- c(candidate_files, collect_shape_files(configured_path, recursive = TRUE))
-  candidate_files <- c(candidate_files, collect_shape_files(default_path, recursive = FALSE))
-  candidate_files <- c(candidate_files, collect_shape_files(default_dir, recursive = FALSE))
-
-  search_roots <- c(
-    file.path("shapes", level),
-    file.path("shapes", toupper(level)),
-    file.path("shapes", tools::toTitleCase(level)),
-    "shapes",
-    file.path("mapas", level),
-    "mapas",
-    "."
-  )
-
-  for (root in unique(search_roots)) {
-    candidate_files <- c(candidate_files, collect_shape_files(root, recursive = root != "."))
-  }
-
-  candidate_files <- unique(candidate_files[file.exists(candidate_files)])
-  if (length(candidate_files) == 0) {
-    return(NULL)
-  }
-
-  tokens <- shape_level_tokens(level)
-  configured_norm <- normalize_existing_path(configured_path)
-  default_norm <- normalize_existing_path(default_path)
-  default_dir_norm <- normalize_existing_path(default_dir)
-
-  has_token <- function(text_value) {
-    text_value <- normalize_key(text_value)
-    any(vapply(tokens, function(tok) grepl(tok, text_value, fixed = TRUE), logical(1)))
-  }
-
-  score_shape_file <- function(path) {
-    path_norm <- normalize_existing_path(path)
-    base_name <- tools::file_path_sans_ext(basename(path))
-    dir_name <- dirname(path)
-
-    score <- 0
-
-    if (!is.null(configured_norm) && configured_norm != "") {
-      if (!dir.exists(configured_path) && identical(path_norm, configured_norm)) {
-        score <- score + 1000
-      } else if (dir.exists(configured_path)) {
-        configured_dir_norm <- normalize_existing_path(configured_path)
-        if (!is.null(configured_dir_norm) && configured_dir_norm != "" &&
-          startsWith(path_norm, configured_dir_norm)) {
-          score <- score + 700
-        }
-      }
-    }
-
-    if (!is.null(default_norm) && default_norm != "" && identical(path_norm, default_norm)) {
-      score <- score + 500
-    }
-
-    if (!is.null(default_dir_norm) && default_dir_norm != "" && startsWith(path_norm, default_dir_norm)) {
-      score <- score + 120
-    }
-
-    if (has_token(base_name)) {
-      score <- score + 250
-    }
-
-    if (has_token(dir_name)) {
-      score <- score + 120
-    }
-
-    score - (nchar(path_norm) / 1000)
-  }
-
-  scores <- vapply(candidate_files, score_shape_file, numeric(1))
-  candidate_files[which.max(scores)]
-}
-
-get_shape_candidate_columns <- function(level = c("municipio", "gve", "drs")) {
-  level <- match.arg(level)
-
-  switch(
-    level,
-    municipio = c(
-      "municipio", "municipio_nome", "municipio_nm", "nome_municipio",
-      "name_muni", "nm_mun", "nm_municip", "nm_municipio",
-      "cd_mun", "cod_mun", "cod_ibge", "codigo_ibge", "nome", "name"
-    ),
-    gve = c(
-      "gve", "dominio_gve", "nome_gve", "nm_gve", "grupo_vigilancia",
-      "grupo_vig", "gve_numero", "cod_gve", "codigo_gve", "id_gve",
-      "cd_gve", "codmacro", "cod_macro", "codmacrogve", "cod_macro_gve",
-      "name", "nome"
-    ),
-    drs = c(
-      "drs", "nome_drs", "nm_drs", "diretoria_regional",
-      "regional_saude", "drs_numero", "cod_drs", "codigo_drs", "id_drs",
-      "cd_drs", "name", "nome"
-    )
-  )
-}
-
-guess_shape_key_column <- function(shp, level = c("municipio", "gve", "drs")) {
-  level <- match.arg(level)
-  candidates <- get_shape_candidate_columns(level)
-
-  cols <- names(shp)
-  cols_lower <- tolower(cols)
-  idx <- match(tolower(candidates), cols_lower)
-  idx <- idx[!is.na(idx)]
-
-  if (length(idx) > 0) {
-    return(cols[idx[1]])
-  }
-
-  # Fallback para primeira coluna textual quando o nome da chave não for conhecido.
-  char_cols <- cols[vapply(shp, function(x) is.character(x) || is.factor(x), logical(1))]
-  if (length(char_cols) > 0) {
-    return(char_cols[1])
-  }
-
-  # Fallback para primeira coluna não-geométrica (inclui códigos numéricos).
-  non_geom_cols <- cols[!vapply(shp, function(x) inherits(x, "sfc"), logical(1))]
-  if (length(non_geom_cols) > 0) {
-    return(non_geom_cols[1])
-  }
-
-  NULL
+  configured_path <- trimws(Sys.getenv(unname(shape_file_envvars[level]), unset = ""))
+  path <- if (configured_path != "") configured_path else unname(shape_default_paths[level])
+  if (file.exists(path)) path else NULL
 }
 
 normalize_shape_key <- function(values, level = c("municipio", "gve", "drs")) {
@@ -405,77 +239,46 @@ get_local_shape_layer <- local({
   function(level = c("municipio", "gve", "drs")) {
     level <- match.arg(level)
 
+    if (exists(level, envir = cache, inherits = FALSE)) {
+      return(get(level, envir = cache, inherits = FALSE))
+    }
+
     if (!requireNamespace("sf", quietly = TRUE)) {
       return(NULL)
     }
 
     shp_path <- find_shape_file(level)
     if (is.null(shp_path)) {
+      warning("Shapefile do nível '", level, "' não encontrado.", call. = FALSE)
       return(NULL)
     }
 
-    file_info <- file.info(shp_path)
-    cache_key <- paste(level, shp_path, as.character(file_info$mtime), sep = "::")
-
-    if (exists(cache_key, envir = cache, inherits = FALSE)) {
-      return(get(cache_key, envir = cache, inherits = FALSE))
-    }
-
     shp <- tryCatch(
-      {
-        sf::st_read(
-          dsn = shp_path,
-          quiet = TRUE,
-          stringsAsFactors = FALSE,
-          options = "ENCODING=UTF-8"
-        )
-      },
+      sf::st_read(dsn = shp_path, quiet = TRUE, stringsAsFactors = FALSE, options = "ENCODING=UTF-8"),
       error = function(e) NULL
     )
-
     if (is.null(shp) || nrow(shp) == 0) {
       return(NULL)
     }
 
-    key_col <- guess_shape_key_column(shp, level)
-    if (is.null(key_col)) {
+    key_col <- unname(shape_key_columns[level])
+    if (!(key_col %in% names(shp))) {
+      warning("Shapefile '", shp_path, "' sem a coluna ", key_col, ".", call. = FALSE)
       return(NULL)
     }
 
-    candidate_cols <- get_shape_candidate_columns(level)
-    shp_cols <- names(shp)
-    shp_cols_lower <- tolower(shp_cols)
-    idx_candidates <- match(tolower(candidate_cols), shp_cols_lower)
-    idx_candidates <- idx_candidates[!is.na(idx_candidates)]
-    candidate_matches <- unique(shp_cols[idx_candidates])
-    candidate_matches <- setdiff(candidate_matches, key_col)
-
-    alt_key_col <- NULL
-    if (length(candidate_matches) > 0) {
-      alt_key_col <- candidate_matches[1]
+    shp <- sf::st_transform(shp, 4326)
+    if (level == "municipio") {
+      shp$cod_ibge <- as.character(shp[[key_col]])
+      shp$map_label <- as.character(shp$NM_MUN)
+      shp$map_key <- shp$cod_ibge
     } else {
-      char_cols <- shp_cols[
-        vapply(shp, function(x) is.character(x) || is.factor(x), logical(1)) &
-          shp_cols != key_col
-      ]
-      if (length(char_cols) > 0) {
-        alt_key_col <- char_cols[1]
-      }
+      shp$map_label <- as.character(shp[[key_col]])
+      shp$map_key <- normalize_shape_key(shp$map_label, level = level)
     }
 
-    shp <- shp %>%
-      mutate(
-        map_key = normalize_shape_key(.data[[key_col]], level = level),
-        map_key_alt = if (!is.null(alt_key_col)) normalize_shape_key(.data[[alt_key_col]], level = level) else NA_character_,
-        map_label = as.character(.data[[key_col]])
-      )
-
-    attr(shp, "shape_level") <- level
     attr(shp, "shape_path") <- shp_path
-    attr(shp, "shape_key_column") <- key_col
-    attr(shp, "shape_key_alt_column") <- alt_key_col
-
-    assign(cache_key, shp, envir = cache)
+    assign(level, shp, envir = cache)
     shp
   }
 })
@@ -607,11 +410,15 @@ prepare_oftalmo_dataset <- function(raw_data) {
     candidates = c("TotalCaso", "total_caso", "casos", "totalcaso"),
     regex_candidates = c("total.*caso", "\\bcasos\\b", "qtd.*cas")
   )
-  populacao_col <- pick_column_with_override(
+  # A população não vem do banco: a coluna "Populacao" da tabela não contém
+  # habitantes. O denominador vem da tabela IBGE (ver anexar_populacao_ibge).
+  cod_ibge_col <- pick_column_with_override(
     raw_data,
-    override_env_var = "OFTALMO_COL_POPULACAO",
-    candidates = c("Populacao", "populacao", "pop", "population", "Pop"),
-    regex_candidates = c("popul")
+    override_env_var = "OFTALMO_COL_COD_IBGE",
+    candidates = c(
+      "CodIBGE", "cod_ibge", "codigo_ibge", "CodMunIBGE", "CodMunicipioIBGE",
+      "CodMunicipioNotificacao", "cod_municipio_ibge", "CD_MUN", "ibge"
+    )
   )
   surto_col <- pick_column_with_override(
     raw_data,
@@ -742,7 +549,7 @@ prepare_oftalmo_dataset <- function(raw_data) {
       ),
       casos = sanitize_numeric_values(.data[[casos_col]], default = 0),
       casos = ifelse(is.na(casos), 0, pmax(round(casos), 0)),
-      populacao = if (!is.null(populacao_col)) sanitize_numeric_values(.data[[populacao_col]], default = NA_real_) else NA_real_,
+      cod_ibge = if (!is.null(cod_ibge_col)) as.character(.data[[cod_ibge_col]]) else NA_character_,
       surto_n = if (!is.null(surto_col)) sanitize_numeric_values(.data[[surto_col]], default = 0) else 0,
       surto_n = ifelse(is.na(surto_n), 0, pmax(round(surto_n), 0)),
       surto_flag = if (!is.null(surto_flag_col)) {
@@ -774,8 +581,8 @@ prepare_oftalmo_dataset <- function(raw_data) {
       ano = ano_registro,
       semana = semana_registro,
       semana = pmin(pmax(semana, 1), 53),
-      populacao = ifelse(!is.finite(populacao) | populacao <= 0, NA_real_, populacao),
-      surtos = surto_n + surto_flag,
+      # NuSurto já conta os surtos; a flag Surto só vale quando NuSurto está vazio.
+      surtos = ifelse(surto_n > 0, surto_n, surto_flag),
       sexo_masc = ifelse(is.na(sexo_masc), 0, pmax(round(sexo_masc), 0)),
       sexo_fem = ifelse(is.na(sexo_fem), 0, pmax(round(sexo_fem), 0)),
       fx_menor1 = ifelse(is.na(fx_menor1), 0, pmax(round(fx_menor1), 0)),
@@ -789,7 +596,7 @@ prepare_oftalmo_dataset <- function(raw_data) {
       encaminhamentos = ifelse(is.na(encaminhamentos), 0, pmax(round(encaminhamentos), 0))
     ) %>%
     filter(!is.na(ano), !is.na(semana)) %>%
-    group_by(ano, semana, drs, drs_codigo, gve, gve_codigo, municipio, uvis, unidade_saude, populacao) %>%
+    group_by(ano, semana, drs, drs_codigo, gve, gve_codigo, municipio, cod_ibge, uvis, unidade_saude) %>%
     summarise(
       casos = sum(casos, na.rm = TRUE),
       surtos = sum(surtos, na.rm = TRUE),
@@ -805,9 +612,6 @@ prepare_oftalmo_dataset <- function(raw_data) {
       coleta_material = sum(coleta_material, na.rm = TRUE),
       encaminhamentos = sum(encaminhamentos, na.rm = TRUE),
       .groups = "drop"
-    ) %>%
-    mutate(
-      incidencia = ifelse(populacao > 0, round((casos / populacao) * 100000, 2), NA_real_)
     ) %>%
     arrange(ano, semana, drs, gve, municipio, uvis, unidade_saude)
 
@@ -1204,105 +1008,253 @@ load_epidemiological_data <- function(
   )
 }
 
-dados_epidemiologicos <- load_epidemiological_data(
-  prefer_db = TRUE,
-  prefer_json = FALSE,
-  enable_json = FALSE,
-  json_path = "",
-  json_url = ""
+# ---------------------------------------------------------------------------
+# Calendário epidemiológico
+# ---------------------------------------------------------------------------
+
+# A SE 1 começa no domingo da semana que contém pelo menos 4 dias de janeiro.
+inicio_ano_epidemiologico <- function(ano) {
+  jan1 <- as.Date(sprintf("%04d-01-01", as.integer(ano)))
+  dia_semana <- as.integer(format(jan1, "%w"))
+  jan1 + ifelse(dia_semana <= 3, -dia_semana, 7 - dia_semana)
+}
+
+semanas_no_ano_epidemiologico <- function(ano) {
+  as.integer((inicio_ano_epidemiologico(as.integer(ano) + 1) - inicio_ano_epidemiologico(ano)) / 7)
+}
+
+semana_epidemiologica_da_data <- function(data = Sys.Date()) {
+  data <- as.Date(data)
+  ano <- as.integer(format(data, "%Y"))
+  ano <- ifelse(data < inicio_ano_epidemiologico(ano), ano - 1L, ano)
+  ano <- ifelse(data >= inicio_ano_epidemiologico(ano + 1L), ano + 1L, ano)
+  semana <- as.integer(as.numeric(data - inicio_ano_epidemiologico(ano)) %/% 7) + 1L
+  list(ano = ano, semana = semana)
+}
+
+# ---------------------------------------------------------------------------
+# População IBGE por município e ano
+# ---------------------------------------------------------------------------
+
+# Grafias usadas na base de notificação que diferem do nome oficial do IBGE.
+municipio_aliases <- c(
+  "sao luis do paraitinga" = "sao luiz do paraitinga",
+  "embu" = "embu das artes",
+  "moji mirim" = "mogi mirim",
+  "moji guacu" = "mogi guacu",
+  "moji das cruzes" = "mogi das cruzes",
+  "ipaucu" = "ipaussu",
+  "brodosqui" = "brodowski",
+  "florinia" = "florinea",
+  "santa barbara doeste" = "santa barbara d oeste"
 )
-dados_fonte <- "database"
 
-get_gve_by_drs <- function(drs) {
-  sort(unique(dados_epidemiologicos$gve[dados_epidemiologicos$drs == drs]))
+populacao_ibge_path <- function() {
+  path <- trimws(Sys.getenv("OFTALMO_POPULACAO_CSV", unset = ""))
+  if (path == "") {
+    path <- file.path("data", "populacao_ibge_sp.csv")
+  }
+  path
 }
 
-get_municipios_by_gve <- function(gve) {
-  sort(unique(dados_epidemiologicos$municipio[dados_epidemiologicos$gve == gve]))
-}
-
-get_municipio_coords <- function(municipios) {
-  base <- data.frame(municipio = unique(as.character(municipios)), stringsAsFactors = FALSE)
-  coords <- base %>%
-    mutate(
-      lat = NA_real_,
-      lng = NA_real_
-    )
-
-  if (!requireNamespace("geobr", quietly = TRUE) || !requireNamespace("sf", quietly = TRUE)) {
-    return(coords)
-  }
-
-  muni_sf <- tryCatch(
-    geobr::read_municipality(
-      code_muni = "SP",
-      year = 2020,
-      simplified = TRUE,
-      showProgress = FALSE
-    ),
-    error = function(e) NULL
-  )
-
-  if (is.null(muni_sf) || nrow(muni_sf) == 0) {
-    return(coords)
-  }
-
-  centroids <- tryCatch(
-    sf::st_point_on_surface(muni_sf),
-    error = function(e) NULL
-  )
-
-  if (is.null(centroids)) {
-    return(coords)
-  }
-
-  xy <- sf::st_coordinates(centroids)
-  geobr_coords <- muni_sf %>%
-    mutate(
-      municipio_norm = normalize_key(name_muni),
-      lat = as.numeric(xy[, "Y"]),
-      lng = as.numeric(xy[, "X"])
-    ) %>%
-    sf::st_drop_geometry() %>%
-    select(municipio_norm, lat, lng)
-
-  coords %>%
-    mutate(municipio_norm = normalize_key(municipio)) %>%
-    left_join(geobr_coords, by = "municipio_norm", suffix = c("", "_geobr")) %>%
-    transmute(
-      municipio,
-      lat = lat_geobr,
-      lng = lng_geobr
-    )
-}
-
-get_sp_municipality_shapes <- local({
-  cached_shapes <- NULL
+load_populacao_ibge <- local({
+  cached <- NULL
 
   function() {
-    if (!is.null(cached_shapes)) {
-      return(cached_shapes)
+    if (!is.null(cached)) {
+      return(cached)
     }
 
-    if (!requireNamespace("geobr", quietly = TRUE) || !requireNamespace("sf", quietly = TRUE)) {
-      return(NULL)
+    path <- populacao_ibge_path()
+    if (!file.exists(path)) {
+      stop(
+        "Tabela de população IBGE não encontrada em '", path, "'. ",
+        "Configure OFTALMO_POPULACAO_CSV ou restaure data/populacao_ibge_sp.csv.",
+        call. = FALSE
+      )
     }
 
-    cached_shapes <<- tryCatch(
-      {
-        shp <- geobr::read_municipality(
-          code_muni = "SP",
-          year = 2020,
-          simplified = TRUE,
-          showProgress = FALSE
-        )
-
-        shp %>%
-          mutate(municipio_norm = normalize_key(name_muni))
-      },
-      error = function(e) NULL
+    pop <- utils::read.csv(
+      path,
+      stringsAsFactors = FALSE,
+      encoding = "UTF-8",
+      colClasses = c(cod_ibge = "character")
     )
 
-    cached_shapes
+    cached <<- tibble::as_tibble(pop) %>%
+      mutate(
+        ano = as.integer(ano),
+        populacao = as.numeric(populacao),
+        municipio_chave = normalize_key(municipio)
+      )
+    cached
   }
 })
+
+normalize_municipio_chave <- function(municipio) {
+  chave <- normalize_key(municipio)
+  idx <- match(chave, names(municipio_aliases))
+  chave[!is.na(idx)] <- unname(municipio_aliases[idx[!is.na(idx)]])
+  chave
+}
+
+normalize_cod_ibge <- function(codigo, referencia) {
+  codigo <- gsub("\\D", "", as.character(codigo))
+  codigo[is.na(codigo) | !(nchar(codigo) %in% c(6, 7)) | !startsWith(codigo, "35")] <- NA_character_
+
+  # Códigos de 6 dígitos (sem o dígito verificador) são completados pela tabela IBGE.
+  seis <- !is.na(codigo) & nchar(codigo) == 6
+  if (any(seis)) {
+    ref_seis <- substr(referencia, 1, 6)
+    codigo[seis] <- referencia[match(codigo[seis], ref_seis)]
+  }
+  codigo[!is.na(codigo) & !(codigo %in% referencia)] <- NA_character_
+  codigo
+}
+
+# Substitui a população vinda do banco pela população IBGE do município no ano.
+# Anos fora da série (ex.: ano corrente ainda sem estimativa) usam o ano mais próximo.
+anexar_populacao_ibge <- function(df) {
+  if (is.null(df) || nrow(df) == 0) {
+    return(df)
+  }
+
+  pop <- load_populacao_ibge()
+  ref_municipios <- pop %>%
+    distinct(cod_ibge, municipio, municipio_chave)
+
+  if (!("cod_ibge" %in% names(df))) {
+    df$cod_ibge <- NA_character_
+  }
+
+  df <- df %>%
+    select(-any_of(c("populacao", "incidencia", "populacao_ano_ref"))) %>%
+    mutate(
+      cod_ibge = normalize_cod_ibge(cod_ibge, ref_municipios$cod_ibge),
+      cod_ibge = dplyr::coalesce(
+        cod_ibge,
+        ref_municipios$cod_ibge[match(normalize_municipio_chave(municipio), ref_municipios$municipio_chave)]
+      ),
+      municipio = dplyr::coalesce(
+        ref_municipios$municipio[match(cod_ibge, ref_municipios$cod_ibge)],
+        municipio
+      )
+    )
+
+  anos_pop <- sort(unique(pop$ano))
+  df <- df %>%
+    mutate(
+      populacao_ano_ref = pmin(pmax(ano, min(anos_pop)), max(anos_pop))
+    ) %>%
+    left_join(
+      pop %>% select(cod_ibge, populacao_ano_ref = ano, populacao),
+      by = c("cod_ibge", "populacao_ano_ref")
+    ) %>%
+    mutate(
+      incidencia = ifelse(populacao > 0, round((casos / populacao) * 100000, 2), NA_real_)
+    )
+
+  sem_codigo <- sort(unique(df$municipio[is.na(df$cod_ibge) & df$municipio != "Não informado"]))
+  if (length(sem_codigo) > 0) {
+    warning(
+      "Municípios sem correspondência na tabela IBGE (sem população): ",
+      paste(sem_codigo, collapse = ", "),
+      call. = FALSE
+    )
+  }
+  attr(df, "municipios_sem_ibge") <- sem_codigo
+
+  df
+}
+
+# ---------------------------------------------------------------------------
+# Carga dos dados (cache compartilhado entre sessões)
+# ---------------------------------------------------------------------------
+
+dataset_vazio <- function() {
+  tibble::tibble(
+    ano = integer(), semana = integer(), drs = character(), drs_codigo = character(),
+    gve = character(), gve_codigo = character(), municipio = character(), cod_ibge = character(),
+    uvis = character(), unidade_saude = character(), casos = numeric(), surtos = numeric(),
+    sexo_masc = numeric(), sexo_fem = numeric(), fx_menor1 = numeric(), fx_1a4 = numeric(),
+    fx_5a9 = numeric(), fx_10a14 = numeric(), fx_15mais = numeric(), acao_educativa = numeric(),
+    treinamentos = numeric(), coleta_material = numeric(), encaminhamentos = numeric(),
+    populacao_ano_ref = integer(), populacao = numeric(), incidencia = numeric()
+  )
+}
+
+# Usa os nomes oficiais de GVE e DRS (com acentos) e a DRS de cada GVE da malha
+# estadual, corrigindo códigos de DRS inconsistentes na base.
+padronizar_regionais <- function(df) {
+  if (is.null(df) || nrow(df) == 0) {
+    return(df)
+  }
+  path <- file.path("data", "regionais_sp.csv")
+  if (!file.exists(path)) {
+    return(df)
+  }
+  ref <- utils::read.csv(path, stringsAsFactors = FALSE, encoding = "UTF-8")
+  ref$chave <- normalize_shape_key(ref$gve, level = "gve")
+
+  idx <- match(normalize_shape_key(df$gve, level = "gve"), ref$chave)
+  df$gve <- ifelse(is.na(idx), df$gve, ref$gve[idx])
+  df$drs <- ifelse(is.na(idx), df$drs, ref$drs[idx])
+  df
+}
+
+carregar_dados_painel <- function() {
+  dados <- load_epidemiological_data(
+    prefer_db = TRUE,
+    prefer_json = FALSE,
+    enable_json = FALSE,
+    json_path = "",
+    json_url = ""
+  )
+  dados %>%
+    padronizar_regionais() %>%
+    anexar_populacao_ibge()
+}
+
+# Uma única consulta ao banco por intervalo, mesmo com várias sessões abertas.
+dataset_cache <- new.env(parent = emptyenv())
+
+obter_dados_painel <- function(max_idade_segundos = 0) {
+  carregado_em <- dataset_cache$carregado_em
+  cache_valido <- !is.null(dataset_cache$dados) &&
+    !is.null(carregado_em) &&
+    difftime(Sys.time(), carregado_em, units = "secs") < max_idade_segundos
+
+  if (!cache_valido) {
+    resultado <- tryCatch(
+      list(dados = carregar_dados_painel(), erro = NULL),
+      error = function(e) list(dados = NULL, erro = conditionMessage(e))
+    )
+
+    if (!is.null(resultado$dados) && nrow(resultado$dados) > 0) {
+      dataset_cache$dados <- resultado$dados
+      dataset_cache$carregado_em <- Sys.time()
+      dataset_cache$erro <- NULL
+    } else {
+      dataset_cache$erro <- if (is.null(resultado$erro)) "Consulta sem dados." else resultado$erro
+      if (is.null(dataset_cache$dados)) {
+        dataset_cache$dados <- dataset_vazio()
+      }
+      if (is.null(dataset_cache$carregado_em)) {
+        dataset_cache$carregado_em <- Sys.time()
+      }
+    }
+  }
+
+  list(
+    dados = dataset_cache$dados,
+    carregado_em = dataset_cache$carregado_em,
+    erro = dataset_cache$erro
+  )
+}
+
+carga_inicial <- obter_dados_painel()
+dados_epidemiologicos <- carga_inicial$dados
+dados_fonte <- "database"
+if (!is.null(carga_inicial$erro)) {
+  warning("Falha ao carregar dados do painel: ", carga_inicial$erro, call. = FALSE)
+}
