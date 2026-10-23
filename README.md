@@ -9,6 +9,7 @@ Aplicativo Shiny para o monitoramento semanal das notificações de conjuntivite
 - **Canal endêmico:** método dos quartis (1º quartil, mediana e 3º quartil) dos até 10 anos anteriores, sem anos atípicos.
 - **Tendência e índice de risco:** suavização LOESS com projeção de 8 semanas e um índice heurístico de risco de surto.
 - **Filtros:** ano, DRS, GVE, município e faixa de semanas epidemiológicas. Os filtros de território não se perdem ao trocar o ano.
+- **Território:** com uma DRS, GVE ou município escolhido, todas as partes do painel mostram só esse território. O mapa aproxima nele e apaga o resto do estado, sem números nem clique. As listas trazem os 645 municípios, inclusive os que nunca notificaram.
 - **Ranking por território:** incidência ou casos por GVE, DRS ou município (ou por unidade de saúde, com um município selecionado).
 - **Silêncio epidemiológico:** há quantas semanas cada município do território não notifica, incluindo os que nunca notificaram.
 - **Tabela:** casos e incidência no período e nas últimas 4 semanas, com alerta visual e botão para baixar CSV.

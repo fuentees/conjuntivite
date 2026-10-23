@@ -43,7 +43,7 @@ if (length(anos_disponiveis) == 0) {
   anos_disponiveis <- year(Sys.Date())
 }
 ano_preselecionado <- as.character(max(anos_disponiveis, na.rm = TRUE))
-drs_disponiveis <- sort(unique(as.character(dados_epidemiologicos$drs)))
+drs_disponiveis <- sort(unique(c(as.character(dados_epidemiologicos$drs), load_municipios_referencia()$drs)))
 drs_disponiveis <- drs_disponiveis[!is.na(drs_disponiveis) & trimws(drs_disponiveis) != "" & tolower(drs_disponiveis) != "na"]
 
 banner_topo_src <- if (file.exists(file.path("www", "banner_governo_sp.png"))) {
@@ -195,6 +195,10 @@ ui <- tagList(
             color: #005ca9;
             font-weight: 600;
           }
+          .territorio-chip {
+            background: #005ca9;
+            color: #ffffff;
+          }
           .value-box-subtitle {
             display: block;
             font-size: 0.78rem;
@@ -330,7 +334,8 @@ ui <- tagList(
               uiOutput("uvis_filter_ui")
             ),
             div(
-              class = "d-flex justify-content-end mt-1",
+              class = "d-flex flex-wrap justify-content-between align-items-center gap-2 mt-1",
+              span(textOutput("territorio_atual", inline = TRUE), class = "text-chip territorio-chip"),
               span(textOutput("fonte_dados", inline = TRUE), class = "text-chip")
             )
           )

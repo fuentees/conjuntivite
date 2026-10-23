@@ -141,7 +141,7 @@ server <- function(input, output, session) {
   })
 
   empty_plotly <- function(message) {
-    plotly::plot_ly() %>%
+    plotly::plot_ly(type = "scatter", mode = "markers") %>%
       plotly::layout(
         annotations = list(
           text = message,
@@ -276,6 +276,31 @@ server <- function(input, output, session) {
     rotulo_ano_referencia()
   })
 
+  # Nome do território em exibição, para ninguém confundir os números com os de outra região.
+  nome_territorio <- reactive({
+    if (is_municipio_selected()) {
+      return(input$filtro_municipio)
+    }
+    if (!is.null(input$filtro_gve) && input$filtro_gve != "Todas") {
+      return(paste0("GVE ", input$filtro_gve))
+    }
+    if (!is.null(input$filtro_drs) && input$filtro_drs != "Todas") {
+      return(paste0("DRS ", input$filtro_drs))
+    }
+    "Estado de São Paulo"
+  })
+
+  output$territorio_atual <- renderText({
+    municipios <- municipios_do_territorio()
+    if (is_municipio_selected()) {
+      linha <- municipios %>% slice_head(n = 1)
+      contexto <- if (nrow(linha) == 1) paste0(" · GVE ", linha$gve, " · DRS ", linha$drs) else ""
+      return(paste0("Território: ", input$filtro_municipio, contexto))
+    }
+    n <- length(unique(municipios$municipio))
+    paste0("Território: ", nome_territorio(), " · ", n, if (n == 1) " município" else " municípios")
+  })
+
   output$fonte_dados <- renderText({
     ultima <- ultima_semana_base()
     dados_ate <- if (is.na(ultima$ano)) "sem dados" else paste0("SE ", ultima$semana, "/", ultima$ano)
@@ -306,18 +331,30 @@ server <- function(input, output, session) {
     sort(unique(values))
   }
 
+  # Territórios oficiais (645 municípios com GVE e DRS) somados aos que aparecem na base.
+  # Assim toda DRS, GVE e município consegue se selecionar, mesmo sem notificação.
+  territorios_disponiveis <- reactive({
+    base <- dados_base() %>%
+      distinct(drs = as.character(drs), gve = as.character(gve), municipio = as.character(municipio))
+    ref <- load_municipios_referencia()
+    if (is.null(ref)) {
+      return(base)
+    }
+    bind_rows(ref %>% select(drs, gve, municipio), base) %>% distinct()
+  })
+
   all_drs_choices <- reactive({
-    choices <- clean_choice_values(dados_base()$drs)
+    choices <- clean_choice_values(territorios_disponiveis()$drs)
     if (length(choices) == 0) choices <- "Não informado"
     choices
   })
   all_gve_choices <- reactive({
-    choices <- clean_choice_values(dados_base()$gve)
+    choices <- clean_choice_values(territorios_disponiveis()$gve)
     if (length(choices) == 0) choices <- "Não informado"
     choices
   })
   all_municipio_choices <- reactive({
-    choices <- clean_choice_values(dados_base()$municipio)
+    choices <- clean_choice_values(territorios_disponiveis()$municipio)
     if (length(choices) == 0) choices <- "Não informado"
     choices
   })
@@ -426,7 +463,7 @@ server <- function(input, output, session) {
   }
 
   observeEvent(list(input$filtro_drs, dados_base()), {
-    df <- dados_base()
+    df <- territorios_disponiveis()
     if (!is.null(input$filtro_drs) && input$filtro_drs != "Todas") {
       df <- df %>% filter(drs == input$filtro_drs)
     }
@@ -444,7 +481,7 @@ server <- function(input, output, session) {
   }, ignoreNULL = FALSE)
 
   observeEvent(list(input$filtro_drs, input$filtro_gve, dados_base()), {
-    df <- dados_base()
+    df <- territorios_disponiveis()
     if (!is.null(input$filtro_drs) && input$filtro_drs != "Todas") {
       df <- df %>% filter(drs == input$filtro_drs)
     }
@@ -992,7 +1029,13 @@ server <- function(input, output, session) {
       return("municipio")
     }
     agrupar <- input$agrupar_territorio
-    if (is.null(agrupar) || !(agrupar %in% c("gve", "drs", "municipio"))) "gve" else agrupar
+    if (is.null(agrupar) || !(agrupar %in% c("gve", "drs", "municipio"))) {
+      return("gve")
+    }
+    if (agrupar == "drs" && !is.null(input$filtro_drs) && input$filtro_drs != "Todas") {
+      return("gve")
+    }
+    agrupar
   })
 
   metrica_territorio <- reactive({
@@ -1010,10 +1053,12 @@ server <- function(input, output, session) {
       unidade = paste0("por unidade de saúde — ", input$filtro_municipio),
       municipio = if (!is.null(input$filtro_gve) && input$filtro_gve != "Todas") {
         paste0("por município — GVE ", input$filtro_gve)
+      } else if (!is.null(input$filtro_drs) && input$filtro_drs != "Todas") {
+        paste0("por município — DRS ", input$filtro_drs)
       } else {
         "por município"
       },
-      gve = "por GVE",
+      gve = if (!is.null(input$filtro_drs) && input$filtro_drs != "Todas") paste0("por GVE — DRS ", input$filtro_drs) else "por GVE",
       drs = "por DRS"
     )
     paste0(medida, " ", alvo, ", ", rotulo_periodo())
@@ -1161,7 +1206,8 @@ server <- function(input, output, session) {
 
   output$baixar_tabela <- downloadHandler(
     filename = function() {
-      paste0("conjuntivite_", if (is_municipio_selected()) "unidades" else "municipios", "_", format(Sys.Date(), "%Y%m%d"), ".csv")
+      territorio <- gsub("[^a-z0-9]+", "_", normalize_key(nome_territorio()))
+      paste0("conjuntivite_", territorio, "_", if (is_municipio_selected()) "unidades" else "municipios", "_", format(Sys.Date(), "%Y%m%d"), ".csv")
     },
     content = function(file) {
       tabela <- tabela_operacional_municipios()
@@ -1894,6 +1940,12 @@ server <- function(input, output, session) {
     if (is.null(nivel) || !(nivel %in% c("municipio", "gve", "drs"))) {
       return("municipio")
     }
+    if (is_municipio_selected()) {
+      return("municipio")
+    }
+    if (nivel == "drs" && !is.null(input$filtro_gve) && input$filtro_gve != "Todas") {
+      return("gve")
+    }
     nivel
   })
 
@@ -2272,6 +2324,73 @@ server <- function(input, output, session) {
   # O mapa base é desenhado uma vez; filtros só trocam as camadas (mantém zoom e posição).
   limites_sp <- c(-53.11, -25.31, -44.16, -19.78)
 
+  territorio_filtrado <- reactive({
+    any(c(
+      !is.null(input$filtro_drs) && input$filtro_drs != "Todas",
+      !is.null(input$filtro_gve) && input$filtro_gve != "Todas",
+      is_municipio_selected()
+    ))
+  })
+
+  # Municípios oficiais do território escolhido, tenham ou não notificado.
+  municipios_do_territorio <- reactive({
+    ref <- territorios_disponiveis()
+    if (!is.null(input$filtro_drs) && input$filtro_drs != "Todas") {
+      ref <- ref %>% filter(drs == input$filtro_drs)
+    }
+    if (!is.null(input$filtro_gve) && input$filtro_gve != "Todas") {
+      ref <- ref %>% filter(gve == input$filtro_gve)
+    }
+    if (is_municipio_selected()) {
+      ref <- ref %>% filter(municipio == input$filtro_municipio)
+    }
+    ref
+  })
+
+  codigos_do_territorio <- reactive({
+    ref <- load_municipios_referencia()
+    oficiais <- if (is.null(ref)) character() else ref$cod_ibge[ref$municipio %in% municipios_do_territorio()$municipio & ref$gve %in% municipios_do_territorio()$gve]
+    unique(c(oficiais, as.character(stats::na.omit(dados_filtrados_dimensoes()$cod_ibge))))
+  })
+
+  # Chaves das áreas do mapa que ficam fora do território filtrado.
+  areas_fora_do_filtro <- reactive({
+    nivel <- nivel_mapa_atual()
+    shape <- get_local_shape_layer(nivel)
+    if (!territorio_filtrado() || is.null(shape)) {
+      return(character())
+    }
+    if (nivel == "municipio") {
+      chaves <- as.character(shape$cod_ibge)
+      return(chaves[!(chaves %in% codigos_do_territorio())])
+    }
+    coluna <- if (nivel == "gve") "gve" else "drs"
+    dentro <- unique(normalize_shape_key(municipios_do_territorio()[[coluna]], level = nivel))
+    chaves <- as.character(shape$map_key)
+    chaves[!(chaves %in% dentro)]
+  })
+
+  # O nível do mapa não pode ser maior que o território: com uma GVE escolhida, o polígono
+  # da DRS mostraria só os números da GVE com o nome da DRS.
+  observeEvent(list(input$filtro_drs, input$filtro_gve, input$filtro_municipio), {
+    niveis <- c("Município" = "municipio", "GVE" = "gve", "DRS" = "drs")
+    if (is_municipio_selected()) {
+      niveis <- niveis["Município"]
+    } else if (!is.null(input$filtro_gve) && input$filtro_gve != "Todas") {
+      niveis <- niveis[c("Município", "GVE")]
+    }
+    atual <- if (!is.null(input$nivel_mapa) && input$nivel_mapa %in% niveis) input$nivel_mapa else "municipio"
+    updateSelectInput(session, "nivel_mapa", choices = niveis, selected = atual)
+
+    # Ranking: com uma DRS escolhida, "Por DRS" teria uma barra só.
+    opcoes_ranking <- c("Por GVE" = "gve", "Por DRS" = "drs", "Por município" = "municipio")
+    if (!is.null(input$filtro_drs) && input$filtro_drs != "Todas") {
+      opcoes_ranking <- opcoes_ranking[c("Por GVE", "Por município")]
+    }
+    agrupar <- if (!is.null(input$agrupar_territorio) && input$agrupar_territorio %in% opcoes_ranking) input$agrupar_territorio else "gve"
+    updateRadioButtons(session, "agrupar_territorio", choices = opcoes_ranking, selected = agrupar, inline = TRUE)
+  }, ignoreInit = TRUE)
+
   output$mapa <- renderLeaflet({
     leaflet(options = leafletOptions(minZoom = 5, zoomSnap = 0.25)) %>%
       addProviderTiles("CartoDB.Positron") %>%
@@ -2282,17 +2401,10 @@ server <- function(input, output, session) {
   observeEvent(
     list(input$filtro_drs, input$filtro_gve, input$filtro_municipio),
     {
-      territorio <- dados_filtrados_dimensoes()
-      codigos <- unique(stats::na.omit(territorio$cod_ibge))
       municipios <- get_local_shape_layer("municipio")
-      filtrado <- any(c(
-        !is.null(input$filtro_drs) && input$filtro_drs != "Todas",
-        !is.null(input$filtro_gve) && input$filtro_gve != "Todas",
-        is_municipio_selected()
-      ))
       limites <- limites_sp
-      if (filtrado && !is.null(municipios) && length(codigos) > 0) {
-        selecionados <- municipios[municipios$cod_ibge %in% codigos, ]
+      if (territorio_filtrado() && !is.null(municipios)) {
+        selecionados <- municipios[as.character(municipios$cod_ibge) %in% codigos_do_territorio(), ]
         if (nrow(selecionados) > 0) {
           limites <- as.numeric(sf::st_bbox(selecionados))
         }
@@ -2318,19 +2430,8 @@ server <- function(input, output, session) {
     shape_key <- if (nivel == "municipio") as.character(shape$cod_ibge) else as.character(shape$map_key)
     idx <- match(shape_key, df_mapa$map_key)
 
-    # Com filtro de território, áreas fora dele ficam apagadas em vez de "sem notificação".
-    filtro_territorio <- any(c(
-      !is.null(input$filtro_drs) && input$filtro_drs != "Todas",
-      !is.null(input$filtro_gve) && input$filtro_gve != "Todas",
-      is_municipio_selected()
-    ))
-    territorio <- dados_filtrados_dimensoes()
-    chaves_territorio <- if (nivel == "municipio") {
-      unique(territorio$cod_ibge)
-    } else {
-      unique(normalize_shape_key(territorio[[if (nivel == "gve") "gve" else "drs"]], level = nivel))
-    }
-    fora_filtro <- is.na(idx) & filtro_territorio & !(shape_key %in% chaves_territorio)
+    # Com filtro de território, áreas fora dele ficam apagadas, sem números e sem clique.
+    fora_filtro <- shape_key %in% areas_fora_do_filtro()
 
     shape$rotulo <- dplyr::coalesce(df_mapa$rotulo[idx], as.character(shape$map_label))
     shape$casos <- df_mapa$casos[idx]
@@ -2350,12 +2451,12 @@ server <- function(input, output, session) {
     formatar_num <- function(x, digitos = 0) {
       ifelse(is.finite(x), format(round(x, digitos), big.mark = ".", decimal.mark = ",", nsmall = digitos), "—")
     }
-    shape$opacidade <- ifelse(fora_filtro, 0.15, 0.85)
+    shape$opacidade <- ifelse(fora_filtro, 0.12, 0.85)
     shape$popup <- ifelse(
       is.na(idx),
       paste0(
         "<strong>", htmltools::htmlEscape(shape$rotulo), "</strong><br>",
-        ifelse(fora_filtro, "Fora do filtro selecionado", "Sem notificação no período")
+        ifelse(fora_filtro, "Fora do território selecionado", "Sem notificação no período")
       ),
       paste0(
         "<strong>", htmltools::htmlEscape(shape$rotulo), "</strong><br>",
@@ -2397,30 +2498,38 @@ server <- function(input, output, session) {
     partes <- strsplit(clicked_id, "::", fixed = TRUE)[[1]]
     nivel <- partes[1]
     chave <- partes[2]
-    base <- dados_base()
+    territorios <- territorios_disponiveis()
+
+    # Áreas fora do território filtrado só servem de contexto: o clique não troca de território.
+    if (isTRUE(chave %in% isolate(areas_fora_do_filtro()))) {
+      return(invisible(NULL))
+    }
 
     if (nivel == "municipio") {
-      linha <- base %>% filter(cod_ibge == chave) %>% slice_head(n = 1)
+      ref <- load_municipios_referencia()
+      linha <- if (is.null(ref)) NULL else ref %>% filter(cod_ibge == chave) %>% slice_head(n = 1)
+      if (is.null(linha) || nrow(linha) == 0) {
+        linha <- dados_base() %>% filter(cod_ibge == chave) %>% slice_head(n = 1)
+      }
       if (nrow(linha) == 0) {
-        showNotification("Município sem notificações nesta base.", type = "message", duration = 3)
         return(invisible(NULL))
       }
       updateSelectInput(session, "filtro_drs", selected = linha$drs)
-      updateSelectInput(session, "filtro_gve", choices = c("Todas", clean_choice_values(base$gve[base$drs == linha$drs])), selected = linha$gve)
-      updateSelectInput(session, "filtro_municipio", choices = c("Todos", clean_choice_values(base$municipio[base$gve == linha$gve])), selected = linha$municipio)
+      updateSelectInput(session, "filtro_gve", choices = c("Todas", clean_choice_values(territorios$gve[territorios$drs == linha$drs])), selected = linha$gve)
+      updateSelectInput(session, "filtro_municipio", choices = c("Todos", clean_choice_values(territorios$municipio[territorios$gve == linha$gve])), selected = linha$municipio)
       return(invisible(NULL))
     }
 
     coluna <- if (nivel == "gve") "gve" else "drs"
-    valores <- unique(base[[coluna]])
+    valores <- unique(territorios[[coluna]])
     valor <- valores[normalize_shape_key(valores, level = nivel) == chave][1]
     if (is.na(valor)) {
       return(invisible(NULL))
     }
     if (nivel == "gve") {
-      drs_valor <- base$drs[base$gve == valor][1]
+      drs_valor <- territorios$drs[territorios$gve == valor][1]
       updateSelectInput(session, "filtro_drs", selected = drs_valor)
-      updateSelectInput(session, "filtro_gve", choices = c("Todas", clean_choice_values(base$gve[base$drs == drs_valor])), selected = valor)
+      updateSelectInput(session, "filtro_gve", choices = c("Todas", clean_choice_values(territorios$gve[territorios$drs == drs_valor])), selected = valor)
     } else {
       updateSelectInput(session, "filtro_drs", selected = valor)
       updateSelectInput(session, "filtro_gve", selected = "Todas")
