@@ -68,12 +68,24 @@ ui <- tagList(
   page_navbar(
     theme = custom_theme,
     title = NULL,
+    fillable = FALSE,
     navbar_options = navbar_options(
       bg = "#ffffff",
       theme = "light",
       collapsible = TRUE
     ),
     header = tags$head(
+      tags$script(HTML(
+        "$(document).on('shiny:connected', function() {
+          Shiny.addCustomMessageHandler('cor_situacao', function(cor) {
+            var card = document.getElementById('card_situacao');
+            if (!card) return;
+            ['bg-success', 'bg-warning', 'bg-danger', 'bg-secondary', 'text-bg-success', 'text-bg-warning', 'text-bg-danger', 'text-bg-secondary']
+              .forEach(function(c) { card.classList.remove(c); });
+            card.classList.add('bg-' + cor);
+          });
+        });"
+      )),
       tags$style(
         HTML(
           "
@@ -194,22 +206,62 @@ ui <- tagList(
             color: #52606d;
             line-height: 1.35;
           }
+          .card-header {
+            font-weight: 600;
+            color: #243b53;
+          }
+          .bslib-value-box .value-box-showcase .fa,
+          .bslib-value-box .value-box-showcase svg {
+            opacity: 0.85;
+          }
+          .filter-card .form-label,
+          .filter-card label {
+            font-weight: 600;
+            font-size: 0.85rem;
+            color: #334e68;
+          }
+          .filter-card .irs--shiny .irs-bar {
+            background: #005ca9;
+            border-color: #005ca9;
+          }
+          .filter-card .irs--shiny .irs-from,
+          .filter-card .irs--shiny .irs-to,
+          .filter-card .irs--shiny .irs-single {
+            background: #005ca9;
+          }
+          .dataTables_wrapper .dataTables_paginate {
+            max-width: 100%;
+            overflow-x: auto;
+            white-space: nowrap;
+          }
+          .dataTables_wrapper .dataTables_filter input {
+            margin-left: 0.4rem;
+          }
+          .card-footer.legend-note {
+            background: #fafbfc;
+          }
           #tabela_municipios table.dataTable tbody td,
           #tabela_municipios table.dataTable thead th {
             white-space: nowrap;
             font-size: 0.86rem;
           }
           @media (max-width: 768px) {
-            .sp-gov-banner-img {
-              height: auto;
+            .sp-gov-banner-wrapper {
+              flex-direction: column;
+              align-items: stretch;
             }
             .sp-gov-overlay {
-              left: 10px;
-              bottom: 8px;
-              right: 8px;
-              padding: 0;
-              font-size: 0.85rem;
-              line-height: 1.2;
+              position: static;
+              max-width: none;
+              padding: 0.55rem 12px 0.65rem;
+              font-size: 1rem;
+              line-height: 1.25;
+              background: #00467d;
+              text-shadow: none;
+            }
+            .container-fluid.pt-3 {
+              padding-left: 10px;
+              padding-right: 10px;
             }
           }
           "
@@ -227,7 +279,7 @@ ui <- tagList(
           class = "filter-card mb-3",
           card_body(
             layout_columns(
-              col_widths = c(2, 3, 3, 3, 1),
+              col_widths = breakpoints(sm = 12, md = c(6, 6, 6, 6, 12), lg = c(2, 3, 2, 3, 2), xxl = c(2, 3, 3, 3, 1)),
               selectInput(
                 "filtro_ano",
                 label = "Ano",
@@ -264,7 +316,7 @@ ui <- tagList(
               )
             ),
             layout_columns(
-              col_widths = c(5, 7),
+              col_widths = breakpoints(sm = 12, lg = c(5, 7)),
               sliderInput(
                 "filtro_semanas",
                 label = "Semanas epidemiológicas",
@@ -284,7 +336,7 @@ ui <- tagList(
           )
         ),
         layout_columns(
-          col_widths = c(3, 3, 3, 3),
+          col_widths = breakpoints(sm = 12, md = 6, xl = 3),
           value_box(
             title = "Total de casos",
             value = textOutput("total_casos"),
@@ -297,30 +349,31 @@ ui <- tagList(
             title = "Incidência",
             value = textOutput("incidencia_media"),
             tags$small(class = "value-box-subtitle", textOutput("incidencia_subtitulo", inline = TRUE)),
-            showcase = icon("wave-square"),
-            theme = "info",
+            showcase = icon("chart-line"),
+            theme = value_box_theme(bg = "#0277bd", fg = "#ffffff"),
             class = "h-100"
           ),
           value_box(
             title = "Número de surtos",
             value = textOutput("num_surtos"),
             tags$small(class = "value-box-subtitle", textOutput("num_surtos_subtitulo", inline = TRUE)),
-            showcase = icon("triangle-exclamation"),
-            theme = "warning",
+            showcase = icon("people-group"),
+            theme = value_box_theme(bg = "#5e35b1", fg = "#ffffff"),
             class = "h-100"
           ),
           value_box(
             title = "Situação epidemiológica",
             value = textOutput("situacao_epidemiologica"),
             tags$small(class = "value-box-subtitle", textOutput("situacao_descricao", inline = TRUE)),
-            showcase = icon("circle-exclamation"),
-            theme = "danger",
+            showcase = icon("shield-virus"),
+            theme = "secondary",
+            id = "card_situacao",
             class = "h-100"
           )
         ),
         br(),
         layout_columns(
-          col_widths = c(6, 6),
+          col_widths = breakpoints(sm = 12, lg = c(6, 6)),
           card(
             class = "custom-card",
             card_header(textOutput("titulo_serie_temporal", inline = TRUE)),
@@ -331,12 +384,13 @@ ui <- tagList(
             class = "custom-card",
             card_header(textOutput("titulo_canal_endemico", inline = TRUE)),
             plotlyOutput("grafico_canal_endemico", height = "360px"),
+            card_footer(class = "legend-note", textOutput("nota_canal_endemico", inline = TRUE)),
             full_screen = TRUE
           )
         ),
         br(),
         layout_columns(
-          col_widths = c(6, 6),
+          col_widths = breakpoints(sm = 12, lg = c(6, 6)),
           card(
             class = "custom-card",
             card_header("Tendência semanal e projeção de 8 semanas"),
@@ -385,7 +439,7 @@ ui <- tagList(
         ),
         br(),
         layout_columns(
-          col_widths = c(7, 5),
+          col_widths = breakpoints(sm = 12, xl = c(7, 5)),
           card(
             class = "custom-card",
             card_header(
@@ -444,7 +498,7 @@ ui <- tagList(
         ),
         br(),
         layout_columns(
-          col_widths = c(4, 4, 4),
+          col_widths = breakpoints(sm = 12, md = c(6, 6, 12), xl = c(4, 4, 4)),
           card(
             class = "custom-card",
             card_header("Distribuição por sexo"),
@@ -519,7 +573,8 @@ ui <- tagList(
             ),
             tags$li(
               tags$strong("Tendência: "),
-              "suavização LOESS das semanas observadas e projeção linear das 8 semanas seguintes, limitada ao fim do ano epidemiológico."
+              "suavização LOESS das semanas observadas e projeção linear das 8 semanas seguintes, limitada ao fim do ano epidemiológico. ",
+              "A semana mais recente do ano corrente aparece em destaque (\"semana em aberto\") e fica fora do ajuste, porque ainda recebe notificações."
             ),
             tags$li(
               tags$strong("Filtro de semanas: "),

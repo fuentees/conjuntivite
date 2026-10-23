@@ -18,6 +18,40 @@ ensure_attached_package("plotly")
 ensure_attached_package("leaflet")
 ensure_attached_package("DT")
 
+# Aparência comum a todos os gráficos: fonte do painel, números em português,
+# barra de ferramentas enxuta e exportação em PNG.
+finalizar_plotly <- function(p) {
+  p %>%
+    plotly::layout(
+      separators = ",.",
+      font = list(family = "Inter, 'Segoe UI', sans-serif", size = 12, color = "#334e68"),
+      hoverlabel = list(font = list(family = "Inter, 'Segoe UI', sans-serif", size = 12)),
+      legend = list(font = list(size = 11), bgcolor = "rgba(255,255,255,0)")
+    ) %>%
+    plotly::config(
+      displaylogo = FALSE,
+      locale = "pt-BR",
+      modeBarButtonsToRemove = c(
+        "select2d", "lasso2d", "autoScale2d", "zoomIn2d", "zoomOut2d",
+        "toggleSpikelines", "hoverClosestCartesian", "hoverCompareCartesian"
+      ),
+      toImageButtonOptions = list(format = "png", scale = 2, filename = "painel_conjuntivite")
+    )
+}
+
+renderPlotly <- function(expr, env = parent.frame(), quoted = FALSE) {
+  if (!quoted) {
+    expr <- substitute(expr)
+  }
+  grafico <- function() NULL
+  body(grafico) <- expr
+  environment(grafico) <- env
+  plotly::renderPlotly(finalizar_plotly(grafico()))
+}
+
+# Legenda horizontal acima da área do gráfico, sem cobrir os dados.
+legenda_topo <- list(orientation = "h", x = 0, xanchor = "left", y = 1.02, yanchor = "bottom")
+
 server <- function(input, output, session) {
   compute_ano_padrao <- function(df) {
     anos <- sort(unique(df$ano), decreasing = TRUE)
@@ -185,6 +219,15 @@ server <- function(input, output, session) {
       return(as.integer(ultima$semana))
     }
     semanas_no_ano_epidemiologico(ano)
+  }
+
+  # A semana mais recente da base ainda recebe notificações em atraso.
+  semana_em_aberto <- function(ano) {
+    ultima <- ultima_semana_base()
+    if (!is.na(ultima$ano) && identical(as.integer(ano), as.integer(ultima$ano)) && ultima$semana > 1) {
+      return(as.integer(ultima$semana))
+    }
+    integer()
   }
 
   # Faixa de semanas escolhida no filtro (padrão: o ano inteiro).
@@ -681,6 +724,12 @@ server <- function(input, output, session) {
     situacao_data()$status
   })
 
+  # A cor do card acompanha a situação: verde, laranja, vermelho ou cinza.
+  observe({
+    cor <- switch(situacao_data()$status, NORMAL = "success", ALERTA = "warning", EPIDEMIA = "danger", "secondary")
+    session$sendCustomMessage("cor_situacao", cor)
+  })
+
   output$situacao_descricao <- renderText({
     situacao_data()$descricao
   })
@@ -769,10 +818,13 @@ server <- function(input, output, session) {
     media_movel_continua <- roll_mean(casos_base_mm, k = 4)
     media_movel_atual <- media_movel_continua[(length(cauda_ano_anterior) + 1):length(media_movel_continua)]
 
+    semana_incompleta <- semana_em_aberto(ano_ref)
     serie_plot <- serie %>%
       mutate(
         casos_plot = ifelse(semana <= semana_limite, casos, NA_real_),
-        media_movel_4s = ifelse(semana <= semana_limite, media_movel_atual, NA_real_)
+        media_movel_4s = ifelse(semana <= semana_limite, media_movel_atual, NA_real_),
+        cor = ifelse(semana %in% semana_incompleta, "#90caf9", "#1976d2"),
+        rotulo = ifelse(semana %in% semana_incompleta, paste0("SE ", semana, " (ainda recebendo notificações)"), paste0("SE ", semana))
       )
 
     # Ano anterior inteiro, para comparar a curva semana a semana.
@@ -786,25 +838,29 @@ server <- function(input, output, session) {
       x = ~semana,
       y = ~casos_plot,
       type = "bar",
-      name = "Casos por semana",
-      marker = list(color = "#1976d2", opacity = 0.9),
-      hovertemplate = "SE %{x}<br>Casos: %{y:,.0f}<extra></extra>"
+      name = paste0("Casos em ", ano_ref),
+      marker = list(color = ~cor, opacity = 0.9),
+      text = ~rotulo,
+      textposition = "none",
+      hovertemplate = "%{text}<br>Casos: %{y:,.0f}<extra></extra>"
     ) %>%
       add_trace(
         data = serie_plot,
+        inherit = FALSE,
         x = ~semana,
         y = ~media_movel_4s,
         type = "scatter",
         mode = "lines",
         name = "Média móvel (4 semanas)",
         line = list(color = "#ef6c00", width = 2.4),
-        hovertemplate = "SE %{x}<br>Média móvel 4s: %{y:,.1f}<extra></extra>"
+        hovertemplate = "Média móvel 4s: %{y:,.1f}<extra></extra>"
       )
 
     if (tem_ano_anterior) {
       p <- p %>%
         add_trace(
           data = serie_anterior,
+          inherit = FALSE,
           x = ~semana,
           y = ~casos,
           type = "scatter",
@@ -819,8 +875,8 @@ server <- function(input, output, session) {
       layout(
         separators = ",.",
         hovermode = "x unified",
-        legend = list(orientation = "h", x = 0, y = 1.08),
-        margin = list(l = 55, r = 20, t = 10, b = 45),
+        legend = legenda_topo,
+        margin = list(l = 55, r = 15, t = 40, b = 50),
         plot_bgcolor = "rgba(245,245,245,0.5)",
         paper_bgcolor = "white",
         xaxis = list(title = "Semana epidemiológica", range = c(0.5, n_semanas + 0.5), showgrid = TRUE, gridcolor = "#e5e7eb"),
@@ -844,6 +900,20 @@ server <- function(input, output, session) {
 
   output$titulo_canal_endemico <- renderText({
     paste0("Canal endêmico — ", rotulo_ano_referencia())
+  })
+
+  output$nota_canal_endemico <- renderText({
+    anos_hist <- attr(canal_endemico(), "anos_historicos")
+    if (length(anos_hist) == 0) {
+      return("")
+    }
+    anos_texto <- if (length(anos_hist) > 1) paste0(min(anos_hist), " a ", max(anos_hist)) else as.character(anos_hist)
+    excluidos <- canal_anos_excluidos[canal_anos_excluidos >= min(anos_hist) & canal_anos_excluidos <= max(anos_hist)]
+    paste0(
+      "Faixas pelos quartis de ", length(anos_hist), " anos anteriores (", anos_texto,
+      if (length(excluidos) > 0) paste0(", sem ", paste(excluidos, collapse = " e ")) else "",
+      "). Êxito: abaixo do 1º quartil. Segurança: até a mediana. Alerta: até o 3º quartil. Epidêmica: acima do 3º quartil."
+    )
   })
 
   output$grafico_canal_endemico <- renderPlotly({
@@ -874,26 +944,18 @@ server <- function(input, output, session) {
         )
     }
 
-    anos_texto <- if (length(anos_hist) > 1) paste0(min(anos_hist), "–", max(anos_hist)) else as.character(anos_hist)
-    excluidos <- canal_anos_excluidos[canal_anos_excluidos >= min(anos_hist) & canal_anos_excluidos <= max(anos_hist)]
-    nota <- paste0(
-      "Quartis de ", length(anos_hist), " anos (", anos_texto, ")",
-      if (length(excluidos) > 0) paste0(", sem ", paste(excluidos, collapse = ", ")) else "",
-      ". A linha vai até a última semana com dados."
-    )
-
     plot_ly() %>%
-      faixa(~q3, ~teto, "Epidêmica (> 3º quartil)", "rgba(211, 47, 47, 0.16)") %>%
-      faixa(~mediana, ~q3, "Alerta (mediana a 3º quartil)", "rgba(237, 108, 2, 0.22)") %>%
-      faixa(~q1, ~mediana, "Segurança (1º quartil a mediana)", "rgba(251, 192, 45, 0.25)") %>%
-      faixa(~zero, ~q1, "Êxito (< 1º quartil)", "rgba(46, 125, 50, 0.20)") %>%
+      faixa(~zero, ~q1, "Êxito", "rgba(46, 125, 50, 0.20)") %>%
+      faixa(~q1, ~mediana, "Segurança", "rgba(251, 192, 45, 0.25)") %>%
+      faixa(~mediana, ~q3, "Alerta", "rgba(237, 108, 2, 0.22)") %>%
+      faixa(~q3, ~teto, "Epidêmica", "rgba(211, 47, 47, 0.16)") %>%
       add_trace(
         data = canal_df,
         x = ~semana,
         y = ~mediana,
         type = "scatter",
         mode = "lines",
-        name = "Mediana histórica",
+        name = "Mediana",
         line = list(color = "#607d8b", dash = "dash", width = 1.4),
         hovertemplate = "Mediana: %{y:,.1f}<extra></extra>"
       ) %>%
@@ -909,28 +971,14 @@ server <- function(input, output, session) {
         hovertemplate = "Casos: %{y:,.0f}<extra></extra>"
       ) %>%
       layout(
-        separators = ",.",
         hovermode = "x unified",
-        legend = list(orientation = "h", x = 0, y = -0.22),
-        margin = list(l = 55, r = 20, t = 30, b = 40),
+        legend = c(legenda_topo, list(traceorder = "normal")),
+        margin = list(l = 55, r = 15, t = 40, b = 50),
         plot_bgcolor = "white",
         paper_bgcolor = "white",
         xaxis = list(title = "Semana epidemiológica", range = c(1, nrow(canal_df)), showgrid = FALSE),
         yaxis = list(title = "Casos", range = c(0, teto), showgrid = TRUE, gridcolor = "#e5e7eb"),
-        shapes = faixa_semanas_destacada(),
-        annotations = list(
-          list(
-            x = 0.01,
-            y = 1.02,
-            xref = "paper",
-            yref = "paper",
-            xanchor = "left",
-            yanchor = "bottom",
-            text = nota,
-            showarrow = FALSE,
-            font = list(size = 11, color = "#52606d")
-          )
-        )
+        shapes = faixa_semanas_destacada()
       )
   })
 
@@ -1054,17 +1102,19 @@ server <- function(input, output, session) {
       type = "bar",
       orientation = "h",
       marker = list(color = if (metrica == "incidencia") "#2563eb" else "#005ca9", opacity = 0.9),
-      text = ~texto,
-      textposition = "none",
-      hovertemplate = "%{text}<extra></extra>"
+      text = ~formatar(valor, if (metrica == "incidencia") 1 else 0),
+      textposition = "outside",
+      cliponaxis = FALSE,
+      textfont = list(size = 11, color = "#334e68"),
+      hovertext = ~texto,
+      hoverinfo = "text"
     ) %>%
       layout(
-        separators = ",.",
         showlegend = FALSE,
-        margin = list(l = altura_rotulos, r = 20, t = if (is.null(nota)) 10 else 30, b = 45),
+        margin = list(l = altura_rotulos, r = 30, t = if (is.null(nota)) 10 else 30, b = 45),
         plot_bgcolor = "rgba(245,245,245,0.5)",
         paper_bgcolor = "white",
-        xaxis = list(title = titulo_x, showgrid = TRUE, gridcolor = "#e5e7eb"),
+        xaxis = list(title = titulo_x, showgrid = TRUE, gridcolor = "#e5e7eb", range = c(0, max(df$valor, na.rm = TRUE) * 1.12)),
         yaxis = list(title = "", showgrid = FALSE, automargin = TRUE),
         annotations = if (is.null(nota)) list() else anotacao_topo(nota)
       )
@@ -1257,6 +1307,7 @@ server <- function(input, output, session) {
         list(
           observado = tibble::tibble(semana = integer(), casos = numeric(), tendencia = numeric()),
           previsao = tibble::tibble(semana = integer(), previsto = numeric()),
+          incompleta = tibble::tibble(semana = integer(), casos = numeric()),
           slope = 0,
           semana_limite = 0
         )
@@ -1265,6 +1316,14 @@ server <- function(input, output, session) {
 
     n_semanas <- nrow(serie)
     semana_limite <- min(semana_final_ano(selected_year()), n_semanas)
+    # A semana em aberto fica fora do ajuste, senão a queda artificial puxa a tendência para baixo.
+    em_aberto <- semana_em_aberto(selected_year())
+    incompleta <- serie %>%
+      filter(semana %in% em_aberto, semana <= semana_limite) %>%
+      mutate(casos = tidyr::replace_na(casos, 0))
+    if (nrow(incompleta) > 0) {
+      semana_limite <- semana_limite - 1L
+    }
 
     observado <- serie %>%
       filter(semana <= semana_limite) %>%
@@ -1320,6 +1379,7 @@ server <- function(input, output, session) {
     list(
       observado = observado,
       previsao = previsao,
+      incompleta = incompleta,
       slope = slope,
       semana_limite = semana_limite
     )
@@ -1540,7 +1600,8 @@ server <- function(input, output, session) {
         type = "scatter",
         mode = "lines",
         name = "Observado",
-        line = list(color = "#005ca9", width = 2.4)
+        line = list(color = "#005ca9", width = 2.4),
+        hovertemplate = "Observado: %{y:,.0f}<extra></extra>"
       ) %>%
       add_trace(
         data = modelo$observado,
@@ -1549,27 +1610,47 @@ server <- function(input, output, session) {
         type = "scatter",
         mode = "lines",
         name = "Tendência (LOESS)",
-        line = list(color = "#2e7d32", width = 2, dash = "dash")
+        line = list(color = "#2e7d32", width = 2, dash = "dash"),
+        hovertemplate = "Tendência: %{y:,.0f}<extra></extra>"
       )
 
     if (nrow(modelo$previsao) > 0) {
+      # A projeção parte do último ponto da tendência, para a linha ficar contínua.
+      ponto_partida <- modelo$observado %>%
+        utils::tail(1) %>%
+        transmute(semana, previsto = tendencia)
       p <- p %>%
         add_trace(
-          data = modelo$previsao,
+          data = bind_rows(ponto_partida, modelo$previsao),
           x = ~semana,
           y = ~previsto,
           type = "scatter",
           mode = "lines",
           name = "Projeção (8 semanas)",
-          line = list(color = "#ef6c00", width = 2.2, dash = "dot")
+          line = list(color = "#ef6c00", width = 2.2, dash = "dot"),
+          hovertemplate = "Projeção: %{y:,.0f}<extra></extra>"
+        )
+    }
+
+    if (nrow(modelo$incompleta) > 0) {
+      p <- p %>%
+        add_trace(
+          data = modelo$incompleta,
+          x = ~semana,
+          y = ~casos,
+          type = "scatter",
+          mode = "markers",
+          name = "Semana em aberto",
+          marker = list(color = "#ffffff", size = 9, line = list(color = "#005ca9", width = 2)),
+          hovertemplate = "Semana em aberto: %{y:,.0f}<extra></extra>"
         )
     }
 
     p %>%
       layout(
         hovermode = "x unified",
-        legend = list(orientation = "h", x = 0, y = 1.08),
-        margin = list(l = 55, r = 20, t = 10, b = 45),
+        legend = legenda_topo,
+        margin = list(l = 55, r = 15, t = 40, b = 50),
         plot_bgcolor = "rgba(245,245,245,0.5)",
         paper_bgcolor = "white",
         xaxis = list(title = "Semana epidemiológica", showgrid = TRUE, gridcolor = "#e5e7eb"),
@@ -1594,7 +1675,8 @@ server <- function(input, output, session) {
         type = "scatter",
         mode = "lines",
         name = "Índice observado",
-        line = list(color = "#6a1b9a", width = 2.4)
+        line = list(color = "#6a1b9a", width = 2.4),
+        hovertemplate = "Índice: %{y:.0%}<extra></extra>"
       ) %>%
       add_trace(
         x = c(min(obs$semana), max(c(obs$semana, fut$semana))),
@@ -1602,27 +1684,29 @@ server <- function(input, output, session) {
         type = "scatter",
         mode = "lines",
         name = "Limiar de alerta (70%)",
-        line = list(color = "#d32f2f", dash = "dash", width = 1.7)
+        line = list(color = "#d32f2f", dash = "dash", width = 1.7),
+        hoverinfo = "skip"
       )
 
     if (nrow(fut) > 0) {
       p <- p %>%
         add_trace(
-          data = fut,
+          data = bind_rows(obs %>% utils::tail(1) %>% select(semana, prob_surto), fut %>% select(semana, prob_surto)),
           x = ~semana,
           y = ~prob_surto,
           type = "scatter",
           mode = "lines",
           name = "Índice projetado",
-          line = list(color = "#ef6c00", dash = "dot", width = 2.2)
+          line = list(color = "#ef6c00", dash = "dot", width = 2.2),
+          hovertemplate = "Projetado: %{y:.0%}<extra></extra>"
         )
     }
 
     p %>%
       layout(
         hovermode = "x unified",
-        legend = list(orientation = "h", x = 0, y = 1.10),
-        margin = list(l = 55, r = 20, t = 10, b = 45),
+        legend = legenda_topo,
+        margin = list(l = 55, r = 15, t = 40, b = 50),
         plot_bgcolor = "rgba(245,245,245,0.5)",
         paper_bgcolor = "white",
         xaxis = list(title = "Semana epidemiológica", showgrid = TRUE, gridcolor = "#e5e7eb"),
@@ -1728,7 +1812,7 @@ server <- function(input, output, session) {
       layout(
         separators = ",.",
         showlegend = FALSE,
-        margin = list(l = 55, r = 20, t = 30, b = 45),
+        margin = list(l = 55, r = 15, t = 30, b = 50),
         plot_bgcolor = "rgba(245,245,245,0.5)",
         paper_bgcolor = "white",
         xaxis = list(title = "Faixa etária (anos)", showgrid = FALSE),
@@ -1754,23 +1838,27 @@ server <- function(input, output, session) {
       return(empty_plotly(mensagem_sem_registro("ações", primeiro_ano_detalhes()$acoes)))
     }
 
+    acoes_df <- acoes_df %>% arrange(quantidade)
     plot_ly(
       acoes_df,
-      x = ~reorder(acao, -quantidade),
-      y = ~quantidade,
+      x = ~quantidade,
+      y = ~factor(acao, levels = acao),
       type = "bar",
+      orientation = "h",
       marker = list(color = "#00897b"),
       name = "Quantidade",
-      hovertemplate = "%{x}: %{y:,.0f}<extra></extra>"
+      text = ~format(quantidade, big.mark = ".", decimal.mark = ","),
+      textposition = "outside",
+      cliponaxis = FALSE,
+      hovertemplate = "%{y}: %{x:,.0f}<extra></extra>"
     ) %>%
       layout(
-        separators = ",.",
         showlegend = FALSE,
-        margin = list(l = 55, r = 20, t = 10, b = 90),
+        margin = list(l = 10, r = 30, t = 10, b = 45),
         plot_bgcolor = "rgba(245,245,245,0.5)",
         paper_bgcolor = "white",
-        xaxis = list(title = "", tickangle = 20, showgrid = FALSE),
-        yaxis = list(title = "Quantidade", showgrid = TRUE, gridcolor = "#e5e7eb")
+        xaxis = list(title = "Quantidade no período", showgrid = TRUE, gridcolor = "#e5e7eb", range = c(0, max(acoes_df$quantidade) * 1.15)),
+        yaxis = list(title = "", showgrid = FALSE, automargin = TRUE)
       )
   })
 
@@ -2182,11 +2270,38 @@ server <- function(input, output, session) {
   cores_faixas <- c("#dbeafe", "#93c5fd", "#3b82f6", "#1d4ed8", "#1e3a8a")
 
   # O mapa base é desenhado uma vez; filtros só trocam as camadas (mantém zoom e posição).
+  limites_sp <- c(-53.11, -25.31, -44.16, -19.78)
+
   output$mapa <- renderLeaflet({
-    leaflet(options = leafletOptions(minZoom = 5)) %>%
+    leaflet(options = leafletOptions(minZoom = 5, zoomSnap = 0.25)) %>%
       addProviderTiles("CartoDB.Positron") %>%
-      setView(lng = -48.6, lat = -22.3, zoom = 6)
+      fitBounds(limites_sp[1], limites_sp[2], limites_sp[3], limites_sp[4])
   })
+
+  # Ao escolher DRS, GVE ou município, o mapa aproxima no território escolhido.
+  observeEvent(
+    list(input$filtro_drs, input$filtro_gve, input$filtro_municipio),
+    {
+      territorio <- dados_filtrados_dimensoes()
+      codigos <- unique(stats::na.omit(territorio$cod_ibge))
+      municipios <- get_local_shape_layer("municipio")
+      filtrado <- any(c(
+        !is.null(input$filtro_drs) && input$filtro_drs != "Todas",
+        !is.null(input$filtro_gve) && input$filtro_gve != "Todas",
+        is_municipio_selected()
+      ))
+      limites <- limites_sp
+      if (filtrado && !is.null(municipios) && length(codigos) > 0) {
+        selecionados <- municipios[municipios$cod_ibge %in% codigos, ]
+        if (nrow(selecionados) > 0) {
+          limites <- as.numeric(sf::st_bbox(selecionados))
+        }
+      }
+      leafletProxy("mapa") %>%
+        flyToBounds(limites[1], limites[2], limites[3], limites[4], options = list(duration = 0.6, padding = c(20, 20)))
+    },
+    ignoreInit = TRUE
+  )
 
   observe({
     nivel <- nivel_mapa_atual()
