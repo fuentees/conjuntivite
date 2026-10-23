@@ -5,23 +5,31 @@ ensure_db_dependency <- function(pkg) {
   }
 }
 
-# Função para conectar ao banco de dados MariaDB.
-# Permite sobrescrever por variáveis de ambiente sem alterar o código.
+# Conexão com o MariaDB. Usuário e senha vêm só de variáveis de ambiente
+# (arquivo .Renviron na pasta do projeto, fora do Git). Veja .Renviron.example.
 ConectDb <- function() {
   ensure_db_dependency("DBI")
   ensure_db_dependency("RMariaDB")
 
-  con <- DBI::dbConnect(
+  usuario <- Sys.getenv("OFTALMO_DB_USER")
+  senha <- Sys.getenv("OFTALMO_DB_PASSWORD")
+  if (usuario == "" || senha == "") {
+    stop(
+      "Usuário ou senha do banco não configurados. Copie .Renviron.example para .Renviron, ",
+      "preencha OFTALMO_DB_USER e OFTALMO_DB_PASSWORD e reinicie o R.",
+      call. = FALSE
+    )
+  }
+
+  DBI::dbConnect(
     RMariaDB::MariaDB(),
-    user = Sys.getenv("OFTALMO_DB_USER", unset = "vfontes"),
-    password = Sys.getenv("OFTALMO_DB_PASSWORD", unset = "Saude@123Oftal"),
+    user = usuario,
+    password = senha,
     encoding = "UTF-8",
     dbname = Sys.getenv("OFTALMO_DB_NAME", unset = "cevesp_2k17"),
     host = Sys.getenv("OFTALMO_DB_HOST", unset = "192.168.1.204"),
     port = as.integer(Sys.getenv("OFTALMO_DB_PORT", unset = "3306"))
   )
-
-  con
 }
 
 fetch_oftalmo_raw_data <- function(con) {
