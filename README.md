@@ -22,9 +22,19 @@ A aba **Sobre** explica a metodologia de cada indicador.
 
 1. Abra `conjuntivite.Rproj` no RStudio.
 2. Rode `renv::restore()` para instalar os pacotes nas versões do `renv.lock`.
-3. Rode `shiny::runApp()`.
+3. Copie `.Renviron.example` para `.Renviron` e preencha `OFTALMO_DB_USER` e `OFTALMO_DB_PASSWORD`. Reinicie o R (Session > Restart R).
+4. Rode `shiny::runApp()`.
 
-O computador precisa alcançar o banco MariaDB da rede interna (diretamente ou por VPN).
+O computador precisa alcançar o banco MariaDB da rede interna (diretamente ou por VPN). O `.Renviron` está no `.gitignore`: a senha nunca vai para o repositório.
+
+## Publicação
+
+O painel é público, mas o banco só existe na rede interna. Por isso o servidor que roda o painel precisa estar na rede interna (ou ter acesso a ela) e, ao mesmo tempo, ser acessível pela internet. O shinyapps.io não alcança o banco. Caminhos possíveis, a combinar com a TI:
+
+- **Shiny Server (gratuito) num servidor da rede interna**, publicado para fora pela TI (proxy reverso ou DMZ). O banco continua fechado; só o painel fica exposto.
+- **Cópia periódica dos dados agregados** para um servidor externo, se a TI não quiser expor nenhum servidor interno.
+
+No servidor, o `.Renviron` fica na pasta do app, com o usuário do banco de preferência só com permissão de leitura (`SELECT`) na tabela `OftalmoNotifica9a60`.
 
 ## Testes
 
@@ -60,7 +70,7 @@ As variáveis abaixo podem ir no `.Renviron` do projeto.
 | `OFTALMO_COL_COD_IBGE` | (vazio) | Nome da coluna do banco com o código IBGE do município. |
 | `OFTALMO_POPULACAO_CSV` | `data/populacao_ibge_sp.csv` | Outra tabela de população. |
 | `MAPA_SHAPE_MUNICIPIO`, `MAPA_SHAPE_GVE`, `MAPA_SHAPE_DRS` | arquivos em `shapes/` | Outras malhas para o mapa. |
-| `OFTALMO_DB_HOST`, `OFTALMO_DB_PORT`, `OFTALMO_DB_NAME`, `OFTALMO_DB_USER`, `OFTALMO_DB_PASSWORD` | ver `functions/ConectDb.R` | Conexão com o banco. |
+| `OFTALMO_DB_HOST`, `OFTALMO_DB_PORT`, `OFTALMO_DB_NAME`, `OFTALMO_DB_USER`, `OFTALMO_DB_PASSWORD` | usuário e senha obrigatórios; host `192.168.1.204`, porta `3306`, banco `cevesp_2k17` | Conexão com o banco. Ficam no `.Renviron`, nunca no código. |
 
 ## Estrutura
 
