@@ -1,10 +1,7 @@
 ensure_db_dependency <- function(pkg) {
+  # Os pacotes vêm do renv.lock (renv::restore()); não instala nada em tempo de execução.
   if (!requireNamespace(pkg, quietly = TRUE)) {
-    install.packages(pkg, dependencies = TRUE)
-  }
-
-  if (!requireNamespace(pkg, quietly = TRUE)) {
-    stop(sprintf("Pacote '%s' não disponível para conexão com banco.", pkg))
+    stop(sprintf("Pacote '%s' não disponível para conexão com banco. Rode renv::restore().", pkg))
   }
 }
 

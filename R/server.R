@@ -18,6 +18,40 @@ ensure_attached_package("plotly")
 ensure_attached_package("leaflet")
 ensure_attached_package("DT")
 
+# Aparência comum a todos os gráficos: fonte do painel, números em português,
+# barra de ferramentas enxuta e exportação em PNG.
+finalizar_plotly <- function(p) {
+  p %>%
+    plotly::layout(
+      separators = ",.",
+      font = list(family = "Inter, 'Segoe UI', sans-serif", size = 12, color = "#334e68"),
+      hoverlabel = list(font = list(family = "Inter, 'Segoe UI', sans-serif", size = 12)),
+      legend = list(font = list(size = 11), bgcolor = "rgba(255,255,255,0)")
+    ) %>%
+    plotly::config(
+      displaylogo = FALSE,
+      locale = "pt-BR",
+      modeBarButtonsToRemove = c(
+        "select2d", "lasso2d", "autoScale2d", "zoomIn2d", "zoomOut2d",
+        "toggleSpikelines", "hoverClosestCartesian", "hoverCompareCartesian"
+      ),
+      toImageButtonOptions = list(format = "png", scale = 2, filename = "painel_conjuntivite")
+    )
+}
+
+renderPlotly <- function(expr, env = parent.frame(), quoted = FALSE) {
+  if (!quoted) {
+    expr <- substitute(expr)
+  }
+  grafico <- function() NULL
+  body(grafico) <- expr
+  environment(grafico) <- env
+  plotly::renderPlotly(finalizar_plotly(grafico()))
+}
+
+# Legenda horizontal acima da área do gráfico, sem cobrir os dados.
+legenda_topo <- list(orientation = "h", x = 0, xanchor = "left", y = 1.02, yanchor = "bottom")
+
 server <- function(input, output, session) {
   compute_ano_padrao <- function(df) {
     anos <- sort(unique(df$ano), decreasing = TRUE)
@@ -27,20 +61,8 @@ server <- function(input, output, session) {
     as.character(format(Sys.Date(), "%Y"))
   }
 
-  load_dataset_runtime <- function() {
-    dataset <- load_epidemiological_data(
-      prefer_db = TRUE,
-      prefer_json = FALSE,
-      enable_json = FALSE,
-      json_path = "",
-      json_url = ""
-    )
-
-    list(
-      data = dataset,
-      source = "database"
-    )
-  }
+  refresh_minutes <- suppressWarnings(as.numeric(Sys.getenv("OFTALMO_REFRESH_MINUTES", unset = "5")))
+  refresh_segundos <- if (is.finite(refresh_minutes) && refresh_minutes > 0) refresh_minutes * 60 else 0
 
   dataset_signature <- function(df) {
     if (is.null(df) || nrow(df) == 0) {
@@ -55,7 +77,8 @@ server <- function(input, output, session) {
   dados_runtime <- reactiveVal(dados_epidemiologicos)
   fonte_runtime <- reactiveVal(dados_fonte)
   assinatura_runtime <- reactiveVal(dataset_signature(dados_epidemiologicos))
-  ultima_atualizacao <- reactiveVal(Sys.time())
+  ultima_atualizacao <- reactiveVal(carga_inicial$carregado_em)
+  erro_carga <- reactiveVal(carga_inicial$erro)
   ano_choices_cache <- reactiveVal(c("Todos", as.character(sort(unique(dados_epidemiologicos$ano), decreasing = TRUE))))
 
   dados_base <- reactive({
@@ -66,41 +89,59 @@ server <- function(input, output, session) {
     sort(unique(dados_base()$ano), decreasing = TRUE)
   })
 
-  refresh_minutes <- suppressWarnings(as.numeric(Sys.getenv("OFTALMO_REFRESH_MINUTES", unset = "5")))
-  refresh_ms <- if (is.finite(refresh_minutes) && refresh_minutes > 0) {
-    as.integer(round(refresh_minutes * 60 * 1000))
-  } else {
-    0L
-  }
-
-  if (refresh_ms > 0) {
+  if (refresh_segundos > 0) {
     observe({
-      invalidateLater(refresh_ms, session)
+      invalidateLater(refresh_segundos * 1000, session)
 
-      refreshed <- tryCatch(
-        load_dataset_runtime(),
-        error = function(e) {
-          warning("Falha ao atualizar dados do painel: ", conditionMessage(e))
-          NULL
-        }
-      )
+      # O cache é compartilhado: com várias sessões abertas, o banco é consultado
+      # no máximo uma vez por intervalo.
+      carga <- obter_dados_painel(max_idade_segundos = refresh_segundos)
+      erro_carga(carga$erro)
+      if (!is.null(carga$erro)) {
+        warning("Falha ao atualizar dados do painel: ", carga$erro, call. = FALSE)
+      }
 
-      if (is.null(refreshed) || is.null(refreshed$data) || nrow(refreshed$data) == 0) {
+      if (is.null(carga$dados) || nrow(carga$dados) == 0) {
         return(invisible(NULL))
       }
 
-      assinatura_nova <- dataset_signature(refreshed$data)
-      if (!identical(assinatura_nova, assinatura_runtime())) {
-        dados_runtime(refreshed$data)
-        fonte_runtime(refreshed$source)
+      assinatura_nova <- dataset_signature(carga$dados)
+      if (!identical(assinatura_nova, isolate(assinatura_runtime()))) {
+        dados_runtime(carga$dados)
         assinatura_runtime(assinatura_nova)
-        ultima_atualizacao(Sys.time())
       }
+      ultima_atualizacao(carga$carregado_em)
     })
   }
 
+  # Última semana epidemiológica com notificação na base inteira.
+  ultima_semana_base <- reactive({
+    df <- dados_base()
+    if (nrow(df) == 0) {
+      return(list(ano = NA_integer_, semana = NA_integer_))
+    }
+    ano_max <- max(df$ano, na.rm = TRUE)
+    list(ano = ano_max, semana = max(df$semana[df$ano == ano_max], na.rm = TRUE))
+  })
+
+  # Primeiro ano em que um campo detalhado (sexo, faixa etária, surtos, ações) aparece preenchido.
+  primeiro_ano_com <- function(df, colunas) {
+    anos <- df$ano[rowSums(as.matrix(df[, colunas, drop = FALSE]), na.rm = TRUE) > 0]
+    if (length(anos) == 0) NA_integer_ else min(anos)
+  }
+
+  primeiro_ano_detalhes <- reactive({
+    df <- dados_base()
+    list(
+      sexo = primeiro_ano_com(df, c("sexo_masc", "sexo_fem")),
+      faixa = primeiro_ano_com(df, c("fx_menor1", "fx_1a4", "fx_5a9", "fx_10a14", "fx_15mais")),
+      surtos = primeiro_ano_com(df, "surtos"),
+      acoes = primeiro_ano_com(df, c("acao_educativa", "treinamentos", "coleta_material", "encaminhamentos"))
+    )
+  })
+
   empty_plotly <- function(message) {
-    plotly::plot_ly() %>%
+    plotly::plot_ly(type = "scatter", mode = "markers") %>%
       plotly::layout(
         annotations = list(
           text = message,
@@ -170,10 +211,117 @@ server <- function(input, output, session) {
     identical(input$filtro_ano, "Todos")
   })
 
+  # Última semana a exibir no ano: a última com dados no ano corrente da base,
+  # ou o total de semanas epidemiológicas daquele ano.
+  semana_final_ano <- function(ano) {
+    ultima <- ultima_semana_base()
+    if (!is.na(ultima$ano) && identical(as.integer(ano), as.integer(ultima$ano))) {
+      return(as.integer(ultima$semana))
+    }
+    semanas_no_ano_epidemiologico(ano)
+  }
+
+  # A semana mais recente da base ainda recebe notificações em atraso.
+  semana_em_aberto <- function(ano) {
+    ultima <- ultima_semana_base()
+    if (!is.na(ultima$ano) && identical(as.integer(ano), as.integer(ultima$ano)) && ultima$semana > 1) {
+      return(as.integer(ultima$semana))
+    }
+    integer()
+  }
+
+  # Faixa de semanas escolhida no filtro (padrão: o ano inteiro).
+  semanas_filtro <- reactive({
+    faixa <- input$filtro_semanas
+    if (is.null(faixa) || length(faixa) != 2) {
+      return(c(1L, 53L))
+    }
+    as.integer(sort(faixa))
+  })
+
+  filtro_semanas_ativo <- reactive({
+    faixa <- semanas_filtro()
+    faixa[1] > 1 || faixa[2] < 53
+  })
+
+  # Semanas efetivas de um ano: a faixa do filtro, cortada na última semana com dados.
+  intervalo_semanas <- function(ano) {
+    faixa <- semanas_filtro()
+    c(faixa[1], min(faixa[2], semana_final_ano(ano)))
+  }
+
+  rotulo_ano_referencia <- reactive({
+    ano <- selected_year()
+    semanas <- intervalo_semanas(ano)
+    if (semanas[1] > semanas[2]) {
+      faixa <- semanas_filtro()
+      return(paste0(ano, " (SE ", faixa[1], " a ", faixa[2], ", ainda sem dados)"))
+    }
+    paste0(ano, " (SE ", semanas[1], " a ", semanas[2], ")")
+  })
+
+  rotulo_periodo <- reactive({
+    if (is_all_years_selected()) {
+      anos <- anos_ordenados()
+      if (length(anos) == 0) {
+        return("todos os anos")
+      }
+      rotulo <- paste0(min(anos), " a ", max(anos))
+      if (filtro_semanas_ativo()) {
+        faixa <- semanas_filtro()
+        rotulo <- paste0(rotulo, ", SE ", faixa[1], " a ", faixa[2])
+      }
+      return(rotulo)
+    }
+    rotulo_ano_referencia()
+  })
+
+  # Nome do território em exibição, para ninguém confundir os números com os de outra região.
+  nome_territorio <- reactive({
+    if (is_municipio_selected()) {
+      return(input$filtro_municipio)
+    }
+    if (!is.null(input$filtro_gve) && input$filtro_gve != "Todas") {
+      return(paste0("GVE ", input$filtro_gve))
+    }
+    if (!is.null(input$filtro_drs) && input$filtro_drs != "Todas") {
+      return(paste0("DRS ", input$filtro_drs))
+    }
+    "Estado de São Paulo"
+  })
+
+  output$territorio_atual <- renderText({
+    municipios <- municipios_do_territorio()
+    if (is_municipio_selected()) {
+      linha <- municipios %>% slice_head(n = 1)
+      contexto <- if (nrow(linha) == 1) paste0(" · GVE ", linha$gve, " · DRS ", linha$drs) else ""
+      return(paste0("Território: ", input$filtro_municipio, contexto))
+    }
+    n <- length(unique(municipios$municipio))
+    paste0("Território: ", nome_territorio(), " · ", n, if (n == 1) " município" else " municípios")
+  })
+
   output$fonte_dados <- renderText({
-    fonte_atual <- fonte_runtime()
-    fonte_texto <- if (identical(fonte_atual, "database")) "Fonte: Banco MariaDB" else paste0("Fonte: ", as.character(fonte_atual))
-    paste0(fonte_texto, " | Atualizado: ", format(ultima_atualizacao(), "%H:%M:%S"))
+    ultima <- ultima_semana_base()
+    dados_ate <- if (is.na(ultima$ano)) "sem dados" else paste0("SE ", ultima$semana, "/", ultima$ano)
+    paste0(
+      "Fonte: banco MariaDB · População: IBGE · Dados até ", dados_ate,
+      " · Atualizado em ", format(ultima_atualizacao(), "%d/%m/%Y %H:%M")
+    )
+  })
+
+  output$aviso_carga <- renderUI({
+    erro <- erro_carga()
+    if (is.null(erro) || erro == "") {
+      return(NULL)
+    }
+    texto <- if (nrow(dados_base()) == 0) {
+      "Não foi possível carregar os dados do banco. O painel tentará novamente em alguns minutos."
+    } else {
+      "A última atualização falhou. O painel mostra os dados da carga anterior."
+    }
+    # O detalhe técnico fica só no log do servidor, para não expor dados de conexão.
+    div(class = "alert alert-warning py-2 mb-3", strong(texto))
   })
 
   clean_choice_values <- function(values) {
@@ -183,18 +331,30 @@ server <- function(input, output, session) {
     sort(unique(values))
   }
 
+  # Territórios oficiais (645 municípios com GVE e DRS) somados aos que aparecem na base.
+  # Assim toda DRS, GVE e município consegue se selecionar, mesmo sem notificação.
+  territorios_disponiveis <- reactive({
+    base <- dados_base() %>%
+      distinct(drs = as.character(drs), gve = as.character(gve), municipio = as.character(municipio))
+    ref <- load_municipios_referencia()
+    if (is.null(ref)) {
+      return(base)
+    }
+    bind_rows(ref %>% select(drs, gve, municipio), base) %>% distinct()
+  })
+
   all_drs_choices <- reactive({
-    choices <- clean_choice_values(dados_base()$drs)
+    choices <- clean_choice_values(territorios_disponiveis()$drs)
     if (length(choices) == 0) choices <- "Não informado"
     choices
   })
   all_gve_choices <- reactive({
-    choices <- clean_choice_values(dados_base()$gve)
+    choices <- clean_choice_values(territorios_disponiveis()$gve)
     if (length(choices) == 0) choices <- "Não informado"
     choices
   })
   all_municipio_choices <- reactive({
-    choices <- clean_choice_values(dados_base()$municipio)
+    choices <- clean_choice_values(territorios_disponiveis()$municipio)
     if (length(choices) == 0) choices <- "Não informado"
     choices
   })
@@ -225,6 +385,14 @@ server <- function(input, output, session) {
       )
       ano_choices_cache(novos_choices)
     }
+
+    drs_choices <- all_drs_choices()
+    updateSelectInput(
+      session,
+      "filtro_drs",
+      choices = c("Todas", drs_choices),
+      selected = manter_selecao(isolate(input$filtro_drs), drs_choices, "Todas")
+    )
   }, ignoreInit = TRUE)
 
   is_sao_paulo_selected <- reactive({
@@ -288,100 +456,48 @@ server <- function(input, output, session) {
     )
   })
 
-  observeEvent(input$filtro_ano, {
-    req(input$filtro_ano)
-    df_ano <- if (identical(input$filtro_ano, "Todos")) {
-      dados_base()
-    } else {
-      dados_base() %>% filter(ano == selected_year())
-    }
+  # As opções de DRS, GVE e município vêm da base inteira (não só do ano escolhido),
+  # para que trocar o ano não apague o território selecionado.
+  manter_selecao <- function(atual, opcoes, padrao) {
+    if (!is.null(atual) && atual %in% opcoes) atual else padrao
+  }
 
-    drs_choices <- clean_choice_values(df_ano$drs)
-    if (length(drs_choices) == 0) {
-      drs_choices <- all_drs_choices()
-    }
-
-    updateSelectInput(
-      session,
-      "filtro_drs",
-      choices = c("Todas", drs_choices),
-      selected = "Todas"
-    )
-    updateSelectInput(session, "filtro_gve", choices = c("Todas", all_gve_choices()), selected = "Todas")
-    updateSelectInput(session, "filtro_municipio", choices = c("Todos", all_municipio_choices()), selected = "Todos")
-  }, ignoreNULL = FALSE)
-
-  observeEvent(input$filtro_drs, {
-    req(input$filtro_ano)
-    df_ano <- if (identical(input$filtro_ano, "Todos")) {
-      dados_base()
-    } else {
-      dados_base() %>% filter(ano == selected_year())
-    }
-    df <- df_ano
-
+  observeEvent(list(input$filtro_drs, dados_base()), {
+    df <- territorios_disponiveis()
     if (!is.null(input$filtro_drs) && input$filtro_drs != "Todas") {
       df <- df %>% filter(drs == input$filtro_drs)
     }
-
     gve_choices <- clean_choice_values(df$gve)
     if (length(gve_choices) == 0) {
-      if (!is.null(input$filtro_drs) && input$filtro_drs != "Todas") {
-        gve_choices <- clean_choice_values(dados_base()$gve[dados_base()$drs == input$filtro_drs])
-      }
-
-      if (length(gve_choices) == 0) {
-        gve_choices <- clean_choice_values(df_ano$gve)
-      }
-      if (length(gve_choices) == 0) {
-        gve_choices <- all_gve_choices()
-      }
+      gve_choices <- all_gve_choices()
     }
 
     updateSelectInput(
       session,
       "filtro_gve",
       choices = c("Todas", gve_choices),
-      selected = "Todas"
+      selected = manter_selecao(input$filtro_gve, gve_choices, "Todas")
     )
-    updateSelectInput(session, "filtro_municipio", choices = c("Todos", all_municipio_choices()), selected = "Todos")
   }, ignoreNULL = FALSE)
 
-  observeEvent(input$filtro_gve, {
-    req(input$filtro_ano)
-    df_ano <- if (identical(input$filtro_ano, "Todos")) {
-      dados_base()
-    } else {
-      dados_base() %>% filter(ano == selected_year())
-    }
-    df <- df_ano
-
+  observeEvent(list(input$filtro_drs, input$filtro_gve, dados_base()), {
+    df <- territorios_disponiveis()
     if (!is.null(input$filtro_drs) && input$filtro_drs != "Todas") {
       df <- df %>% filter(drs == input$filtro_drs)
     }
-
     if (!is.null(input$filtro_gve) && input$filtro_gve != "Todas") {
       df <- df %>% filter(gve == input$filtro_gve)
     }
-
     mun_choices <- clean_choice_values(df$municipio)
     if (length(mun_choices) == 0) {
-      if (!is.null(input$filtro_gve) && input$filtro_gve != "Todas") {
-        mun_choices <- clean_choice_values(dados_base()$municipio[dados_base()$gve == input$filtro_gve])
-      }
-      if (length(mun_choices) == 0) {
-        mun_choices <- clean_choice_values(df_ano$municipio)
-      }
-      if (length(mun_choices) == 0) {
-        mun_choices <- all_municipio_choices()
-      }
+      mun_choices <- all_municipio_choices()
     }
 
     updateSelectInput(
       session,
       "filtro_municipio",
       choices = c("Todos", mun_choices),
-      selected = "Todos"
+      selected = manter_selecao(input$filtro_municipio, mun_choices, "Todos")
     )
   }, ignoreNULL = FALSE)
 
@@ -390,6 +506,7 @@ server <- function(input, output, session) {
     updateSelectInput(session, "filtro_drs", selected = "Todas")
     updateSelectInput(session, "filtro_gve", selected = "Todas")
     updateSelectInput(session, "filtro_municipio", selected = "Todos")
+    updateSliderInput(session, "filtro_semanas", value = c(1, 53))
     if (!is.null(input$filtro_uvis)) {
       updateSelectInput(session, "filtro_uvis", selected = "Todas")
     }
@@ -418,119 +535,136 @@ server <- function(input, output, session) {
     df
   })
 
-  dados_filtrados <- reactive({
-    req(input$filtro_ano)
-    if (identical(input$filtro_ano, "Todos")) {
-      return(dados_filtrados_dimensoes())
-    }
-
-    dados_filtrados_dimensoes() %>%
-      filter(ano == selected_year())
-  })
-
   dados_ano_referencia <- reactive({
     ano_ref <- selected_year()
     dados_filtrados_dimensoes() %>%
       filter(ano == ano_ref)
   })
 
+  # Recorte usado por cards, tabela, mapa e perfil: ano (ou todos) e faixa de semanas.
+  # Série, canal endêmico e tendência mostram o ano inteiro.
   dados_contexto_periodo <- reactive({
-    if (is_all_years_selected()) {
-      return(dados_filtrados_dimensoes())
+    faixa <- semanas_filtro()
+    df <- if (is_all_years_selected()) dados_filtrados_dimensoes() else dados_ano_referencia()
+    if (filtro_semanas_ativo()) {
+      df <- df %>% filter(semana >= faixa[1], semana <= faixa[2])
     }
-    dados_ano_referencia()
+    df
   })
 
   serie_semanal_atual <- reactive({
+    ano_ref <- selected_year()
     df <- dados_ano_referencia() %>%
       group_by(semana) %>%
       summarise(casos = sum(casos, na.rm = TRUE), .groups = "drop")
 
-    tibble::tibble(semana = 1:53) %>%
+    tibble::tibble(semana = seq_len(semanas_no_ano_epidemiologico(ano_ref))) %>%
       left_join(df, by = "semana") %>%
-      mutate(casos = tidyr::replace_na(casos, 0))
+      mutate(
+        casos = tidyr::replace_na(casos, 0),
+        casos = ifelse(semana > semana_final_ano(ano_ref), NA_real_, casos)
+      )
   })
 
+  # Denominador: população IBGE dos municípios do território filtrado que já
+  # notificaram alguma vez nesta base (rede notificante), somada nos anos do período.
+  populacao_periodo <- function(anos) {
+    if (is_sao_paulo_selected() && !is.null(input$filtro_uvis) && input$filtro_uvis != "Todas") {
+      return(NA_real_)
+    }
+    codigos <- unique(stats::na.omit(dados_filtrados_dimensoes()$cod_ibge))
+    if (length(codigos) == 0 || length(anos) == 0) {
+      return(NA_real_)
+    }
+    pop <- load_populacao_ibge()
+    anos_ref <- pmin(pmax(as.integer(anos), min(pop$ano)), max(pop$ano))
+    total <- sum(vapply(
+      anos_ref,
+      function(a) sum(pop$populacao[pop$ano == a & pop$cod_ibge %in% codigos], na.rm = TRUE),
+      numeric(1)
+    ))
+    if (total > 0) total else NA_real_
+  }
+
+  anos_periodo <- reactive({
+    if (is_all_years_selected()) anos_ordenados() else selected_year()
+  })
+
+  canal_anos_excluidos <- local({
+    valor <- Sys.getenv("OFTALMO_CANAL_ANOS_EXCLUIDOS", unset = "2011,2020,2021")
+    anos <- suppressWarnings(as.integer(trimws(strsplit(valor, ",", fixed = TRUE)[[1]])))
+    anos[!is.na(anos)]
+  })
+  canal_janela_anos <- local({
+    valor <- suppressWarnings(as.integer(Sys.getenv("OFTALMO_CANAL_JANELA", unset = "10")))
+    if (is.na(valor) || valor < 3) 10L else valor
+  })
+
+  # Canal endêmico pelo método dos quartis: mediana e quartis 1 e 3 de cada semana
+  # nos anos anteriores ao selecionado (janela móvel, sem os anos atípicos).
   canal_endemico <- reactive({
     req(input$filtro_ano)
+    ano_sel <- selected_year()
+    n_semanas <- semanas_no_ano_epidemiologico(ano_sel)
+
     df <- dados_filtrados_dimensoes() %>%
       group_by(ano, semana) %>%
       summarise(casos = sum(casos, na.rm = TRUE), .groups = "drop")
 
-    if (nrow(df) == 0) {
-      return(tibble::tibble(
-        semana = 1:53,
-        media = 0,
-        limite_superior = 0,
-        limite_inferior = 0,
-        casos = 0
-      ))
-    }
+    anos_historicos <- sort(unique(df$ano[df$ano < ano_sel & !(df$ano %in% canal_anos_excluidos)]), decreasing = TRUE)
+    anos_historicos <- utils::head(anos_historicos, canal_janela_anos)
 
-    ano_sel <- selected_year()
-    df_historico <- df %>% filter(ano != 2011)
+    base <- tibble::tibble(semana = seq_len(n_semanas))
 
-    historico_base <- df_historico %>% filter(ano < ano_sel)
-    if (nrow(historico_base) == 0) {
-      historico_base <- df_historico %>% filter(ano != ano_sel)
-    }
-
-    if (nrow(historico_base) == 0) {
-      stats_semanal <- tibble::tibble(
-        semana = 1:53,
-        media = 0,
-        limite_superior = 0,
-        limite_inferior = 0
-      )
+    if (length(anos_historicos) == 0) {
+      stats_semanal <- base %>% mutate(q1 = NA_real_, mediana = NA_real_, q3 = NA_real_)
     } else {
-      stats_semanal <- historico_base %>%
+      # Semanas sem notificação em um ano histórico contam como zero caso.
+      historico <- tidyr::expand_grid(ano = anos_historicos, semana = seq_len(n_semanas)) %>%
+        left_join(df, by = c("ano", "semana")) %>%
+        mutate(casos = tidyr::replace_na(casos, 0))
+
+      stats_semanal <- historico %>%
         group_by(semana) %>%
         summarise(
-          media = mean(casos, na.rm = TRUE),
-          desvio = sd(casos, na.rm = TRUE),
+          q1 = as.numeric(stats::quantile(casos, 0.25, names = FALSE)),
+          mediana = as.numeric(stats::median(casos)),
+          q3 = as.numeric(stats::quantile(casos, 0.75, names = FALSE)),
           .groups = "drop"
-        ) %>%
-        mutate(
-          desvio = tidyr::replace_na(desvio, 0),
-          limite_superior = pmax(media + 1.96 * desvio, media * 1.15),
-          limite_inferior = pmax(media - 1.96 * desvio, 0)
-        ) %>%
-        select(semana, media, limite_superior, limite_inferior)
+        )
     }
 
     atual <- df %>%
       filter(ano == ano_sel) %>%
-      group_by(semana) %>%
-      summarise(casos = sum(casos, na.rm = TRUE), .groups = "drop")
+      select(semana, casos)
 
-    semana_limite_atual <- if (nrow(atual) > 0) {
-      suppressWarnings(max(atual$semana[atual$casos > 0], na.rm = TRUE))
-    } else {
-      NA_real_
-    }
-    if (!is.finite(semana_limite_atual)) {
-      semana_limite_atual <- 0
-    }
-
-    tibble::tibble(semana = 1:53) %>%
+    resultado <- base %>%
       left_join(stats_semanal, by = "semana") %>%
-      mutate(
-        media = tidyr::replace_na(media, 0),
-        limite_superior = tidyr::replace_na(limite_superior, 0),
-        limite_inferior = tidyr::replace_na(limite_inferior, 0)
-      ) %>%
       left_join(atual, by = "semana") %>%
       mutate(
         casos = tidyr::replace_na(casos, 0),
-        casos = ifelse(semana > semana_limite_atual, NA_real_, casos)
+        casos = ifelse(semana > semana_final_ano(ano_sel), NA_real_, casos)
       )
+
+    attr(resultado, "anos_historicos") <- sort(anos_historicos)
+    resultado
   })
 
   situacao_data <- reactive({
     canal_df <- canal_endemico()
+    ano_sel <- selected_year()
 
-    ultimas <- canal_df %>%
-      filter(is.finite(casos)) %>%
+    if (length(attr(canal_df, "anos_historicos")) == 0) {
+      return(list(status = "SEM HISTÓRICO", descricao = "Sem anos anteriores para comparar"))
+    }
+
+    # A semana mais recente da base ainda recebe notificações em atraso; fica fora da avaliação.
+    observadas <- canal_df %>% filter(is.finite(casos))
+    if (identical(as.integer(ano_sel), as.integer(ultima_semana_base()$ano)) && nrow(observadas) > 1) {
+      observadas <- observadas %>% filter(semana < max(semana))
+    }
+
+    ultimas <- observadas %>%
       arrange(desc(semana)) %>%
       slice_head(n = 4)
 
@@ -539,22 +673,19 @@ server <- function(input, output, session) {
     }
 
     media_recente <- mean(ultimas$casos, na.rm = TRUE)
-    media_esperada <- mean(ultimas$media, na.rm = TRUE)
-    limite_critico <- mean(ultimas$limite_superior, na.rm = TRUE)
+    mediana_esperada <- mean(ultimas$mediana, na.rm = TRUE)
+    limite_epidemico <- mean(ultimas$q3, na.rm = TRUE)
+    periodo <- paste0("SE ", min(ultimas$semana), " a ", max(ultimas$semana))
 
-    if (is.na(media_recente) || is.na(media_esperada) || is.na(limite_critico)) {
-      return(list(status = "SEM DADOS", descricao = "Sem dados para classificação"))
+    if (media_recente > limite_epidemico) {
+      return(list(status = "EPIDEMIA", descricao = paste0("Acima do 3º quartil histórico (", periodo, ")")))
     }
 
-    if (media_recente > limite_critico) {
-      return(list(status = "EPIDEMIA", descricao = "Acima do limite superior do canal"))
+    if (media_recente > mediana_esperada) {
+      return(list(status = "ALERTA", descricao = paste0("Acima da mediana histórica (", periodo, ")")))
     }
 
-    if (media_recente > media_esperada * 1.1) {
-      return(list(status = "ALERTA", descricao = "Acima da média histórica esperada"))
-    }
-
-    list(status = "NORMAL", descricao = "Dentro do comportamento esperado")
+    list(status = "NORMAL", descricao = paste0("Até a mediana histórica (", periodo, ")"))
   })
 
   output$total_casos <- renderText({
@@ -562,34 +693,55 @@ server <- function(input, output, session) {
     format(sum(df$casos, na.rm = TRUE), big.mark = ".", decimal.mark = ",")
   })
 
-  output$incidencia_media <- renderText({
-    df <- dados_contexto_periodo()
-
-    if (nrow(df) == 0) {
-      return("0,00")
+  output$total_casos_subtitulo <- renderText({
+    if (is_all_years_selected()) {
+      return(rotulo_periodo())
     }
+    ano_ref <- selected_year()
+    semanas <- intervalo_semanas(ano_ref)
+    atual <- sum(dados_contexto_periodo()$casos, na.rm = TRUE)
+    anterior <- dados_filtrados_dimensoes() %>%
+      filter(ano == ano_ref - 1, semana >= semanas[1], semana <= semanas[2]) %>%
+      summarise(casos = sum(casos, na.rm = TRUE)) %>%
+      pull(casos)
 
-    pop_total <- df %>%
-      group_by(municipio) %>%
-      summarise(populacao = suppressWarnings(max(populacao, na.rm = TRUE)), .groups = "drop") %>%
-      mutate(populacao = ifelse(is.infinite(populacao) | populacao <= 0, NA_real_, populacao)) %>%
-      summarise(total_pop = sum(populacao, na.rm = TRUE)) %>%
-      pull(total_pop)
+    if (length(anterior) == 0 || !is.finite(anterior) || anterior <= 0) {
+      return(rotulo_ano_referencia())
+    }
+    variacao <- (atual - anterior) / anterior * 100
+    paste0(
+      rotulo_ano_referencia(), " · ",
+      ifelse(variacao >= 0, "+", ""), format(round(variacao, 1), decimal.mark = ","),
+      "% vs mesmo período de ", ano_ref - 1
+    )
+  })
 
-    total_casos <- sum(df$casos, na.rm = TRUE)
-    incidencia <- ifelse(pop_total > 0, (total_casos / pop_total) * 100000, 0)
+  incidencia_periodo <- reactive({
+    total_casos <- sum(dados_contexto_periodo()$casos, na.rm = TRUE)
+    pop <- populacao_periodo(anos_periodo())
+    if (!is.finite(pop) || pop <= 0) NA_real_ else total_casos / pop * 100000
+  })
 
-    paste0(format(round(incidencia, 2), decimal.mark = ","), "/100 mil")
+  output$incidencia_media <- renderText({
+    incidencia <- incidencia_periodo()
+    if (!is.finite(incidencia)) {
+      return("—")
+    }
+    paste0(format(round(incidencia, 1), nsmall = 1, decimal.mark = ",", big.mark = "."), "/100 mil")
+  })
+
+  output$incidencia_subtitulo <- renderText({
+    if (is_sao_paulo_selected() && !is.null(input$filtro_uvis) && input$filtro_uvis != "Todas") {
+      return("Sem população IBGE por UVIS")
+    }
+    if (is_all_years_selected()) {
+      return(paste0("Média anual por 100 mil hab., ", rotulo_periodo()))
+    }
+    paste0("Acumulada por 100 mil hab., ", rotulo_ano_referencia())
   })
 
   output$num_surtos <- renderText({
-    df <- if (identical(input$filtro_ano, "Todos")) {
-      dados_filtrados_dimensoes()
-    } else {
-      dados_ano_referencia()
-    }
-
-    surtos_notificados <- sum(df$surtos, na.rm = TRUE)
+    surtos_notificados <- sum(dados_contexto_periodo()$surtos, na.rm = TRUE)
     if (!is.finite(surtos_notificados)) {
       surtos_notificados <- 0
     }
@@ -598,28 +750,85 @@ server <- function(input, output, session) {
   })
 
   output$num_surtos_subtitulo <- renderText({
-    if (identical(input$filtro_ano, "Todos")) {
-      "Surtos notificados (todos os anos)"
-    } else {
-      paste0("Surtos notificados em ", selected_year())
+    primeiro <- primeiro_ano_detalhes()$surtos
+    if (!is_all_years_selected() && !is.na(primeiro) && selected_year() < primeiro) {
+      return(paste0("Registro de surtos só existe a partir de ", primeiro))
     }
+    paste0("Surtos notificados, ", rotulo_periodo())
   })
 
   output$situacao_epidemiologica <- renderText({
     situacao_data()$status
   })
 
+  # A cor do card acompanha a situação: verde, laranja, vermelho ou cinza.
+  observe({
+    cor <- switch(situacao_data()$status, NORMAL = "success", ALERTA = "warning", EPIDEMIA = "danger", "secondary")
+    session$sendCustomMessage("cor_situacao", cor)
+  })
+
   output$situacao_descricao <- renderText({
     situacao_data()$descricao
   })
 
+  output$titulo_serie_temporal <- renderText({
+    if (is_all_years_selected()) {
+      return(paste0("Casos por ano — ", rotulo_periodo()))
+    }
+    paste0("Casos por semana epidemiológica — ", rotulo_ano_referencia())
+  })
+
   output$grafico_serie_temporal <- renderPlotly({
+    if (is_all_years_selected()) {
+      anual <- dados_filtrados_dimensoes() %>%
+        group_by(ano) %>%
+        summarise(casos = sum(casos, na.rm = TRUE), .groups = "drop") %>%
+        arrange(ano)
+
+      if (nrow(anual) == 0) {
+        return(empty_plotly("Sem dados para os filtros selecionados"))
+      }
+
+      ultima <- ultima_semana_base()
+      anual <- anual %>%
+        mutate(
+          rotulo = ifelse(
+            ano == ultima$ano & ultima$semana < semanas_no_ano_epidemiologico(ano),
+            paste0(ano, " (até SE ", ultima$semana, ")"),
+            as.character(ano)
+          )
+        )
+
+      return(
+        plot_ly(
+          anual,
+          x = ~ano,
+          y = ~casos,
+          type = "bar",
+          text = ~rotulo,
+          textposition = "none",
+          marker = list(color = "#1976d2", opacity = 0.9),
+          hovertemplate = "%{text}<br>Casos: %{y:,.0f}<extra></extra>"
+        ) %>%
+          layout(
+            separators = ",.",
+            margin = list(l = 65, r = 20, t = 10, b = 45),
+            plot_bgcolor = "rgba(245,245,245,0.5)",
+            paper_bgcolor = "white",
+            xaxis = list(title = "Ano", dtick = 1, tickangle = -45, showgrid = FALSE),
+            yaxis = list(title = "Casos", showgrid = TRUE, gridcolor = "#e5e7eb")
+          )
+      )
+    }
+
     ano_ref <- selected_year()
+    n_semanas <- semanas_no_ano_epidemiologico(ano_ref)
+    semana_limite <- semana_final_ano(ano_ref)
     serie_contexto <- dados_filtrados_dimensoes() %>%
       group_by(ano, semana) %>%
       summarise(casos = sum(casos, na.rm = TRUE), .groups = "drop")
 
-    serie <- tibble::tibble(semana = 1:53) %>%
+    serie <- tibble::tibble(semana = seq_len(n_semanas)) %>%
       left_join(
         serie_contexto %>%
           filter(ano == ano_ref) %>%
@@ -629,295 +838,512 @@ server <- function(input, output, session) {
       mutate(casos = tidyr::replace_na(casos, 0)) %>%
       arrange(semana)
 
-    if (nrow(serie) == 0) {
-      return(empty_plotly("Sem dados para os filtros selecionados"))
-    }
-
-    semana_limite <- suppressWarnings(max(serie$semana[serie$casos > 0], na.rm = TRUE))
-    if (!is.finite(semana_limite)) {
-      semana_limite <- suppressWarnings(max(serie$semana, na.rm = TRUE))
-    }
-    if (!is.finite(semana_limite)) {
-      semana_limite <- 53
-    }
-
-    anos_anteriores <- sort(unique(serie_contexto$ano[serie_contexto$ano < ano_ref]), decreasing = TRUE)
-    cauda_ano_anterior <- numeric()
-    if (length(anos_anteriores) > 0) {
-      serie_ano_anterior <- tibble::tibble(semana = 1:53) %>%
-        left_join(
-          serie_contexto %>%
-            filter(ano == anos_anteriores[1]) %>%
-            select(semana, casos),
-          by = "semana"
-        ) %>%
-        mutate(casos = tidyr::replace_na(casos, 0)) %>%
-        arrange(semana)
-
-      semana_limite_prev <- suppressWarnings(max(serie_ano_anterior$semana[serie_ano_anterior$casos > 0], na.rm = TRUE))
-      if (is.finite(semana_limite_prev)) {
-        serie_ano_anterior <- serie_ano_anterior %>% filter(semana <= semana_limite_prev)
-      }
-
-      cauda_ano_anterior <- utils::tail(serie_ano_anterior$casos, 3)
-    }
-
-    if (length(cauda_ano_anterior) < 3) {
-      cauda_ano_anterior <- c(rep(0, 3 - length(cauda_ano_anterior)), cauda_ano_anterior)
+    # A média móvel do início do ano usa as últimas semanas do ano anterior.
+    cauda_ano_anterior <- tibble::tibble(semana = seq_len(semanas_no_ano_epidemiologico(ano_ref - 1))) %>%
+      left_join(
+        serie_contexto %>% filter(ano == ano_ref - 1) %>% select(semana, casos),
+        by = "semana"
+      ) %>%
+      mutate(casos = tidyr::replace_na(casos, 0)) %>%
+      pull(casos) %>%
+      utils::tail(3)
+    if (!any(serie_contexto$ano == ano_ref - 1)) {
+      cauda_ano_anterior <- numeric()
     }
 
     casos_base_mm <- c(cauda_ano_anterior, serie$casos)
     media_movel_continua <- roll_mean(casos_base_mm, k = 4)
     media_movel_atual <- media_movel_continua[(length(cauda_ano_anterior) + 1):length(media_movel_continua)]
 
+    semana_incompleta <- semana_em_aberto(ano_ref)
     serie_plot <- serie %>%
       mutate(
-        casos_plot = ifelse(semana <= semana_limite, casos, NA_real_)
-      ) %>%
-      mutate(
-        media_movel_4s = media_movel_atual,
-        media_movel_4s = ifelse(semana <= semana_limite, media_movel_4s, NA_real_)
+        casos_plot = ifelse(semana <= semana_limite, casos, NA_real_),
+        media_movel_4s = ifelse(semana <= semana_limite, media_movel_atual, NA_real_),
+        cor = ifelse(semana %in% semana_incompleta, "#90caf9", "#1976d2"),
+        rotulo = ifelse(semana %in% semana_incompleta, paste0("SE ", semana, " (ainda recebendo notificações)"), paste0("SE ", semana))
       )
 
-    plot_ly(
+    # Ano anterior inteiro, para comparar a curva semana a semana.
+    serie_anterior <- tibble::tibble(semana = seq_len(semanas_no_ano_epidemiologico(ano_ref - 1))) %>%
+      left_join(serie_contexto %>% filter(ano == ano_ref - 1) %>% select(semana, casos), by = "semana") %>%
+      mutate(casos = tidyr::replace_na(casos, 0))
+    tem_ano_anterior <- any(serie_contexto$ano == ano_ref - 1)
+
+    p <- plot_ly(
       serie_plot,
       x = ~semana,
       y = ~casos_plot,
       type = "bar",
-      name = "Casos por semana",
-      marker = list(color = "#1976d2", opacity = 0.9),
-      hovertemplate = "Semana %{x}<br>Casos: %{y}<extra></extra>"
+      name = paste0("Casos em ", ano_ref),
+      marker = list(color = ~cor, opacity = 0.9),
+      text = ~rotulo,
+      textposition = "none",
+      hovertemplate = "%{text}<br>Casos: %{y:,.0f}<extra></extra>"
     ) %>%
       add_trace(
         data = serie_plot,
+        inherit = FALSE,
         x = ~semana,
         y = ~media_movel_4s,
         type = "scatter",
         mode = "lines",
         name = "Média móvel (4 semanas)",
         line = list(color = "#ef6c00", width = 2.4),
-        hovertemplate = "Semana %{x}<br>Média móvel 4s: %{y:.1f}<extra></extra>"
-      ) %>%
+        hovertemplate = "Média móvel 4s: %{y:,.1f}<extra></extra>"
+      )
+
+    if (tem_ano_anterior) {
+      p <- p %>%
+        add_trace(
+          data = serie_anterior,
+          inherit = FALSE,
+          x = ~semana,
+          y = ~casos,
+          type = "scatter",
+          mode = "lines",
+          name = paste0("Casos em ", ano_ref - 1),
+          line = list(color = "#9ca3af", width = 1.6, dash = "dot"),
+          hovertemplate = paste0(ano_ref - 1, ": %{y:,.0f}<extra></extra>")
+        )
+    }
+
+    p %>%
       layout(
+        separators = ",.",
         hovermode = "x unified",
-        legend = list(orientation = "h", x = 0, y = 1.08),
-        margin = list(l = 55, r = 20, t = 10, b = 45),
+        legend = legenda_topo,
+        margin = list(l = 55, r = 15, t = 40, b = 50),
         plot_bgcolor = "rgba(245,245,245,0.5)",
         paper_bgcolor = "white",
-        xaxis = list(title = "Semana epidemiológica", showgrid = TRUE, gridcolor = "#e5e7eb"),
+        xaxis = list(title = "Semana epidemiológica", range = c(0.5, n_semanas + 0.5), showgrid = TRUE, gridcolor = "#e5e7eb"),
         yaxis = list(title = "Casos", showgrid = TRUE, gridcolor = "#e5e7eb"),
-        annotations = list(
-          list(
-            x = 0.01,
-            y = 1.14,
-            xref = "paper",
-            yref = "paper",
-            xanchor = "left",
-            yanchor = "bottom",
-            text = "Linha laranja: média móvel contínua de 4 semanas (usa semanas finais do ano anterior quando disponível).",
-            showarrow = FALSE,
-            font = list(size = 11, color = "#52606d")
-          )
-        )
+        shapes = faixa_semanas_destacada()
       )
+  })
+
+  # Destaque das semanas escolhidas no filtro, nos gráficos que mostram o ano inteiro.
+  faixa_semanas_destacada <- function() {
+    if (!filtro_semanas_ativo()) {
+      return(list())
+    }
+    faixa <- semanas_filtro()
+    list(list(
+      type = "rect", xref = "x", yref = "paper",
+      x0 = faixa[1] - 0.5, x1 = faixa[2] + 0.5, y0 = 0, y1 = 1,
+      fillcolor = "rgba(0, 92, 169, 0.08)", line = list(width = 0), layer = "below"
+    ))
+  }
+
+  output$titulo_canal_endemico <- renderText({
+    paste0("Canal endêmico — ", rotulo_ano_referencia())
+  })
+
+  output$nota_canal_endemico <- renderText({
+    anos_hist <- attr(canal_endemico(), "anos_historicos")
+    if (length(anos_hist) == 0) {
+      return("")
+    }
+    anos_texto <- if (length(anos_hist) > 1) paste0(min(anos_hist), " a ", max(anos_hist)) else as.character(anos_hist)
+    excluidos <- canal_anos_excluidos[canal_anos_excluidos >= min(anos_hist) & canal_anos_excluidos <= max(anos_hist)]
+    paste0(
+      "Faixas pelos quartis de ", length(anos_hist), " anos anteriores (", anos_texto,
+      if (length(excluidos) > 0) paste0(", sem ", paste(excluidos, collapse = " e ")) else "",
+      "). Êxito: abaixo do 1º quartil. Segurança: até a mediana. Alerta: até o 3º quartil. Epidêmica: acima do 3º quartil."
+    )
   })
 
   output$grafico_canal_endemico <- renderPlotly({
     canal_df <- canal_endemico()
+    anos_hist <- attr(canal_df, "anos_historicos")
 
-    if (nrow(canal_df) == 0) {
-      return(empty_plotly("Sem dados para construir o canal endêmico"))
+    if (nrow(canal_df) == 0 || length(anos_hist) == 0) {
+      return(empty_plotly("Sem anos anteriores suficientes para construir o canal endêmico"))
+    }
+
+    teto <- max(c(canal_df$q3 * 1.4, canal_df$casos), na.rm = TRUE)
+    if (!is.finite(teto) || teto <= 0) {
+      teto <- 1
+    }
+    canal_df <- canal_df %>% mutate(teto = teto, zero = 0)
+
+    faixa <- function(p, ymin, ymax, nome, cor) {
+      p %>%
+        add_ribbons(
+          data = canal_df,
+          x = ~semana,
+          ymin = ymin,
+          ymax = ymax,
+          name = nome,
+          fillcolor = cor,
+          line = list(color = "rgba(0,0,0,0)"),
+          hoverinfo = "skip"
+        )
     }
 
     plot_ly() %>%
-      add_ribbons(
-        data = canal_df,
-        x = ~semana,
-        ymin = ~limite_inferior,
-        ymax = ~limite_superior,
-        name = "Faixa esperada",
-        fillcolor = "rgba(25, 118, 210, 0.18)",
-        line = list(color = "rgba(0,0,0,0)")
-      ) %>%
+      faixa(~zero, ~q1, "Êxito", "rgba(46, 125, 50, 0.20)") %>%
+      faixa(~q1, ~mediana, "Segurança", "rgba(251, 192, 45, 0.25)") %>%
+      faixa(~mediana, ~q3, "Alerta", "rgba(237, 108, 2, 0.22)") %>%
+      faixa(~q3, ~teto, "Epidêmica", "rgba(211, 47, 47, 0.16)") %>%
       add_trace(
         data = canal_df,
         x = ~semana,
-        y = ~media,
+        y = ~mediana,
         type = "scatter",
         mode = "lines",
-        name = "Média histórica",
-        line = list(color = "#607d8b", dash = "dash", width = 1.6)
+        name = "Mediana",
+        line = list(color = "#607d8b", dash = "dash", width = 1.4),
+        hovertemplate = "Mediana: %{y:,.1f}<extra></extra>"
       ) %>%
       add_trace(
         data = canal_df,
         x = ~semana,
         y = ~casos,
         type = "scatter",
-        mode = "lines",
-        name = paste0("Ano atual: ", selected_year()),
-        line = list(color = "#7b1fa2", width = 2.8)
+        mode = "lines+markers",
+        marker = list(size = 4),
+        name = paste0("Casos em ", selected_year()),
+        line = list(color = "#1f2933", width = 2.6),
+        hovertemplate = "Casos: %{y:,.0f}<extra></extra>"
       ) %>%
       layout(
         hovermode = "x unified",
-        legend = list(orientation = "h", x = 0, y = 1.08),
-        margin = list(l = 55, r = 20, t = 10, b = 45),
-        plot_bgcolor = "rgba(245,245,245,0.5)",
+        legend = c(legenda_topo, list(traceorder = "normal")),
+        margin = list(l = 55, r = 15, t = 40, b = 50),
+        plot_bgcolor = "white",
         paper_bgcolor = "white",
-        xaxis = list(title = "Semana epidemiológica", showgrid = TRUE, gridcolor = "#e5e7eb"),
-        yaxis = list(title = "Casos", showgrid = TRUE, gridcolor = "#e5e7eb"),
-        annotations = list(
-          list(
-            x = 0.01,
-            y = 1.13,
-            xref = "paper",
-            yref = "paper",
-            xanchor = "left",
-            yanchor = "bottom",
-            text = "A linha do ano atual é exibida até a última semana com dados",
-            showarrow = FALSE,
-            font = list(size = 11, color = "#52606d")
-          )
-        )
+        xaxis = list(title = "Semana epidemiológica", range = c(1, nrow(canal_df)), showgrid = FALSE),
+        yaxis = list(title = "Casos", range = c(0, teto), showgrid = TRUE, gridcolor = "#e5e7eb"),
+        shapes = faixa_semanas_destacada()
       )
+  })
+
+  # Nível do gráfico de territórios: unidade (município escolhido), município (GVE escolhida)
+  # ou o agrupamento escolhido pelo usuário (GVE, DRS ou município).
+  nivel_territorio <- reactive({
+    if (is_municipio_selected()) {
+      return("unidade")
+    }
+    if (!is.null(input$filtro_gve) && input$filtro_gve != "Todas") {
+      return("municipio")
+    }
+    agrupar <- input$agrupar_territorio
+    if (is.null(agrupar) || !(agrupar %in% c("gve", "drs", "municipio"))) {
+      return("gve")
+    }
+    if (agrupar == "drs" && !is.null(input$filtro_drs) && input$filtro_drs != "Todas") {
+      return("gve")
+    }
+    agrupar
+  })
+
+  metrica_territorio <- reactive({
+    if (identical(nivel_territorio(), "unidade")) {
+      return("casos")
+    }
+    if (identical(input$metrica_territorio, "casos")) "casos" else "incidencia"
   })
 
   output$titulo_grafico_casos_territorio <- renderText({
-    if (is_municipio_selected()) {
-      paste0("Total de casos por unidade de saúde — ", input$filtro_municipio)
-    } else if (!is.null(input$filtro_gve) && input$filtro_gve != "Todas") {
-      paste0("Total de casos por município — ", input$filtro_gve)
-    } else {
-      "Total de casos por GVE"
-    }
+    nivel <- nivel_territorio()
+    medida <- if (metrica_territorio() == "incidencia") "Incidência" else "Casos"
+    alvo <- switch(
+      nivel,
+      unidade = paste0("por unidade de saúde — ", input$filtro_municipio),
+      municipio = if (!is.null(input$filtro_gve) && input$filtro_gve != "Todas") {
+        paste0("por município — GVE ", input$filtro_gve)
+      } else if (!is.null(input$filtro_drs) && input$filtro_drs != "Todas") {
+        paste0("por município — DRS ", input$filtro_drs)
+      } else {
+        "por município"
+      },
+      gve = if (!is.null(input$filtro_drs) && input$filtro_drs != "Todas") paste0("por GVE — DRS ", input$filtro_drs) else "por GVE",
+      drs = "por DRS"
+    )
+    paste0(medida, " ", alvo, ", ", rotulo_periodo())
   })
 
-  output$grafico_casos_gve <- renderPlotly({
-    df_base <- dados_contexto_periodo()
-    municipio_especifico <- is_municipio_selected()
-    gve_especifico <- !is.null(input$filtro_gve) && input$filtro_gve != "Todas"
-
-    if (municipio_especifico) {
-      df <- df_base %>%
-        mutate(
-          unidade_saude = ifelse(
-            is.na(unidade_saude) | trimws(unidade_saude) == "",
-            "Não informado",
-            unidade_saude
-          )
-        ) %>%
-        group_by(unidade_saude) %>%
-        summarise(
-          casos = sum(casos, na.rm = TRUE),
-          surtos = sum(surtos, na.rm = TRUE),
-          .groups = "drop"
-        ) %>%
-        mutate(categoria = unidade_saude) %>%
-        arrange(desc(casos), desc(surtos))
-
-      msg_empty <- "Sem dados por unidade de saúde para os filtros selecionados"
-      x_title <- "Casos"
-      y_title <- "Unidade de saúde"
-      trace_name <- "Casos por unidade"
-      plot_horizontal <- TRUE
-    } else if (gve_especifico) {
-      df <- df_base %>%
-        group_by(municipio) %>%
-        summarise(casos = sum(casos, na.rm = TRUE), .groups = "drop") %>%
-        mutate(categoria = municipio) %>%
-        arrange(desc(casos))
-
-      msg_empty <- "Sem dados por município para os filtros selecionados"
-      x_title <- "Município"
-      y_title <- "Casos"
-      trace_name <- "Casos por município"
-      plot_horizontal <- FALSE
-    } else {
-      df <- df_base %>%
-        group_by(gve) %>%
-        summarise(casos = sum(casos, na.rm = TRUE), .groups = "drop") %>%
-        mutate(categoria = gve) %>%
-        arrange(desc(casos))
-
-      msg_empty <- "Sem dados por GVE para os filtros selecionados"
-      x_title <- "GVE"
-      y_title <- "Casos"
-      trace_name <- "Casos por GVE"
-      plot_horizontal <- FALSE
-    }
-
+  # Casos, população e incidência por GVE ou DRS. A população é a soma dos municípios
+  # da área que notificam nesta base (a mesma regra do card de incidência).
+  indicadores_por_area <- function(coluna) {
+    df <- dados_contexto_periodo()
     if (nrow(df) == 0) {
-      return(empty_plotly(msg_empty))
+      return(tibble::tibble(area = character(), casos = numeric(), surtos = numeric(), populacao = numeric(), incidencia = numeric()))
     }
+    rede <- dados_filtrados_dimensoes() %>%
+      filter(!is.na(cod_ibge)) %>%
+      distinct(area = .data[[coluna]], cod_ibge) %>%
+      left_join(populacao_municipios(anos_periodo()), by = "cod_ibge") %>%
+      group_by(area) %>%
+      summarise(populacao = sum(populacao, na.rm = TRUE), .groups = "drop")
 
-    if (plot_horizontal) {
-      top_n <- min(20, nrow(df))
-      df_plot <- utils::head(df, top_n)
-
-      return(
-        plot_ly(
-          df_plot,
-          x = ~casos,
-          y = ~reorder(categoria, casos),
-          type = "bar",
-          orientation = "h",
-          marker = list(color = "#005ca9", opacity = 0.9),
-          name = trace_name,
-          hovertemplate = "Unidade: %{y}<br>Casos: %{x}<br>Surtos: %{customdata}<extra></extra>",
-          customdata = ~surtos
-        ) %>%
-          layout(
-            showlegend = FALSE,
-            margin = list(l = 230, r = 20, t = 10, b = 45),
-            plot_bgcolor = "rgba(245,245,245,0.5)",
-            paper_bgcolor = "white",
-            xaxis = list(title = x_title, showgrid = TRUE, gridcolor = "#e5e7eb"),
-            yaxis = list(title = y_title, showgrid = FALSE)
-          )
+    df %>%
+      group_by(area = .data[[coluna]]) %>%
+      summarise(casos = sum(casos, na.rm = TRUE), surtos = sum(surtos, na.rm = TRUE), .groups = "drop") %>%
+      left_join(rede, by = "area") %>%
+      mutate(
+        populacao = ifelse(populacao > 0, populacao, NA_real_),
+        incidencia = ifelse(populacao > 0, (casos / populacao) * 100000, NA_real_)
       )
+  }
+
+  output$grafico_casos_gve <- renderPlotly({
+    nivel <- nivel_territorio()
+    metrica <- metrica_territorio()
+
+    df <- if (nivel == "unidade") {
+      dados_contexto_periodo() %>%
+        mutate(categoria = dplyr::coalesce(dplyr::na_if(trimws(as.character(unidade_saude)), ""), "Não informado")) %>%
+        group_by(categoria) %>%
+        summarise(casos = sum(casos, na.rm = TRUE), .groups = "drop") %>%
+        mutate(populacao = NA_real_, incidencia = NA_real_)
+    } else if (nivel == "municipio") {
+      resumo_municipios() %>%
+        transmute(categoria = municipio, casos, populacao, incidencia)
+    } else {
+      indicadores_por_area(nivel) %>%
+        transmute(categoria = area, casos, populacao, incidencia)
     }
+
+    df <- df %>% filter(casos > 0 | is.finite(incidencia))
+    if (metrica == "incidencia") {
+      df <- df %>% filter(is.finite(incidencia))
+    }
+    if (nrow(df) == 0) {
+      return(empty_plotly("Sem dados para os filtros selecionados"))
+    }
+
+    df <- df %>%
+      mutate(valor = if (metrica == "incidencia") incidencia else casos) %>%
+      arrange(desc(valor))
+
+    limite <- 30
+    nota <- NULL
+    if (nrow(df) > limite) {
+      nota <- paste0("Mostrando as ", limite, " maiores de ", nrow(df), ". A tabela abaixo tem todas.")
+      df <- utils::head(df, limite)
+    }
+
+    formatar <- function(x, digitos = 0) {
+      ifelse(is.finite(x), format(round(x, digitos), big.mark = ".", decimal.mark = ",", nsmall = digitos, trim = TRUE), "—")
+    }
+    df <- df %>%
+      mutate(
+        texto = paste0(
+          "<b>", categoria, "</b><br>Casos: ", formatar(casos),
+          ifelse(is.finite(incidencia), paste0("<br>Incidência: ", formatar(incidencia, 1), " por 100 mil hab."), ""),
+          ifelse(is.finite(populacao), paste0("<br>População: ", formatar(populacao)), "")
+        )
+      )
+
+    titulo_x <- if (metrica == "incidencia") "Incidência por 100 mil hab." else "Casos"
+    altura_rotulos <- max(120, min(260, max(nchar(df$categoria)) * 7))
 
     plot_ly(
       df,
-      x = ~reorder(categoria, -casos),
-      y = ~casos,
+      x = ~valor,
+      y = ~factor(categoria, levels = rev(categoria)),
       type = "bar",
-      marker = list(color = "#005ca9", opacity = 0.85),
-      name = trace_name,
-      hovertemplate = paste0(x_title, ": %{x}<br>Casos: %{y}<extra></extra>")
+      orientation = "h",
+      marker = list(color = if (metrica == "incidencia") "#2563eb" else "#005ca9", opacity = 0.9),
+      text = ~formatar(valor, if (metrica == "incidencia") 1 else 0),
+      textposition = "outside",
+      cliponaxis = FALSE,
+      textfont = list(size = 11, color = "#334e68"),
+      hovertext = ~texto,
+      hoverinfo = "text"
     ) %>%
       layout(
         showlegend = FALSE,
-        margin = list(l = 55, r = 20, t = 10, b = 100),
+        margin = list(l = altura_rotulos, r = 30, t = if (is.null(nota)) 10 else 30, b = 45),
         plot_bgcolor = "rgba(245,245,245,0.5)",
         paper_bgcolor = "white",
-        xaxis = list(title = x_title, tickangle = 35, showgrid = FALSE),
-        yaxis = list(title = y_title, showgrid = TRUE, gridcolor = "#e5e7eb")
+        xaxis = list(title = titulo_x, showgrid = TRUE, gridcolor = "#e5e7eb", range = c(0, max(df$valor, na.rm = TRUE) * 1.12)),
+        yaxis = list(title = "", showgrid = FALSE, automargin = TRUE),
+        annotations = if (is.null(nota)) list() else anotacao_topo(nota)
       )
+  })
+
+  rotulo_janela_4s <- reactive({
+    janela <- janela_4_semanas()
+    paste0("SE ", janela$inicio, " a ", janela$fim, "/", janela$ano)
   })
 
   output$titulo_tabela_operacional <- renderText({
     if (is_municipio_selected()) {
-      paste0("Tabela operacional por unidade de saúde — ", input$filtro_municipio)
+      paste0("Casos por unidade de saúde — ", input$filtro_municipio, ", ", rotulo_periodo())
     } else {
-      "Tabela operacional por município (alerta por incidência das últimas 4 semanas)"
+      paste0("Casos por município — ", rotulo_periodo())
     }
   })
 
   output$legenda_tabela_operacional <- renderUI({
+    janela <- rotulo_janela_4s()
     if (is_municipio_selected()) {
       return(
         tags$small(
           class = "legend-note d-block mt-2",
-          HTML("<strong>Legenda tabela (unidade):</strong> vermelho = alerta (surto notificado ou maior volume recente de casos); verde = estável. PART_ANO_PCT e PART_4S_PCT mostram a contribuição da unidade no município selecionado.")
+          HTML(paste0(
+            "<strong>Legenda:</strong> \"Últimas 4 semanas\" = ", janela, ". ",
+            "Vermelho = surto notificado ou unidade entre as 25% com mais casos nas últimas 4 semanas. ",
+            "As colunas de % mostram a participação da unidade no total do município."
+          ))
         )
       )
     }
 
+    incid_periodo <- if (is_all_years_selected()) "média anual" else "acumulada no ano"
     tags$small(
       class = "legend-note d-block mt-2",
-      HTML("<strong>Legenda tabela:</strong> vermelho = alerta (surto notificado ou incidência 4 semanas elevada); verde = estável. INCID_4S orienta ação rápida; INCID_ANUAL mostra acumulado.")
+      HTML(paste0(
+        "<strong>Legenda:</strong> incidência por 100 mil hab. com população IBGE (", incid_periodo, "). ",
+        "\"Últimas 4 semanas\" = ", janela, ". ",
+        "Vermelho = surto notificado ou município entre os 25% com maior incidência nas últimas 4 semanas."
+      ))
     )
   })
+
+  output$baixar_tabela <- downloadHandler(
+    filename = function() {
+      territorio <- gsub("[^a-z0-9]+", "_", normalize_key(nome_territorio()))
+      paste0("conjuntivite_", territorio, "_", if (is_municipio_selected()) "unidades" else "municipios", "_", format(Sys.Date(), "%Y%m%d"), ".csv")
+    },
+    content = function(file) {
+      tabela <- tabela_operacional_municipios()
+      tabela <- if (is_municipio_selected()) {
+        tabela %>%
+          transmute(
+            GVE = gve, `Município` = municipio, `Unidade de saúde` = unidade_saude, `Período` = ano,
+            `Casos no período` = total_ano, `% no período` = round(part_ano_pct, 1),
+            `Casos últimas 4 sem.` = total_4s, `% últimas 4 sem.` = round(part_4s_pct, 1),
+            Surtos = surtos, `Situação` = alerta
+          )
+      } else {
+        tabela %>%
+          transmute(
+            GVE = gve, `Município` = municipio, `Código IBGE` = cod_ibge, `Período` = ano,
+            `População (IBGE)` = populacao, `Casos no período` = total_ano,
+            `Incidência no período` = round(incidencia_anual, 2),
+            `Casos últimas 4 sem.` = total_4s, `Incidência últimas 4 sem.` = round(incidencia_4s, 2),
+            Surtos = surtos, `Situação` = alerta
+          )
+      }
+      # CSV com ; e BOM UTF-8 abre direto no Excel em português.
+      linhas <- utils::capture.output(utils::write.table(
+        tabela, sep = ";", dec = ",", row.names = FALSE, na = "", qmethod = "double"
+      ))
+      texto <- enc2utf8(paste0("\ufeff", paste(linhas, collapse = "\r\n"), "\r\n"))
+      writeBin(charToRaw(texto), file)
+    }
+  )
+
+  # Silêncio epidemiológico: há quantas semanas cada município do território não notifica.
+  silencio_municipios <- reactive({
+    ref <- load_municipios_referencia()
+    ultima <- ultima_semana_base()
+    if (is.null(ref) || is.na(ultima$ano)) {
+      return(NULL)
+    }
+
+    if (!is.null(input$filtro_drs) && input$filtro_drs != "Todas") {
+      ref <- ref %>% filter(drs == input$filtro_drs)
+    }
+    if (!is.null(input$filtro_gve) && input$filtro_gve != "Todas") {
+      ref <- ref %>% filter(gve == input$filtro_gve)
+    }
+    if (is_municipio_selected()) {
+      ref <- ref %>% filter(municipio == input$filtro_municipio)
+    }
+
+    data_base <- inicio_semana_epidemiologica(ultima$ano, ultima$semana)
+    ultimas <- dados_base() %>%
+      filter(!is.na(cod_ibge)) %>%
+      group_by(cod_ibge) %>%
+      summarise(chave = max(ano * 100L + semana), .groups = "drop") %>%
+      mutate(
+        ano = as.integer(chave %/% 100L),
+        semana = as.integer(chave %% 100L),
+        semanas_sem = as.integer(as.numeric(data_base - inicio_semana_epidemiologica(ano, semana)) / 7),
+        ultima_notificacao = paste0("SE ", semana, "/", ano)
+      )
+
+    ref %>%
+      left_join(ultimas %>% select(cod_ibge, ultima_notificacao, semanas_sem), by = "cod_ibge") %>%
+      mutate(
+        situacao = dplyr::case_when(
+          is.na(semanas_sem) ~ "Nunca notificou",
+          semanas_sem >= 8 ~ "8 semanas ou mais",
+          semanas_sem >= 4 ~ "4 a 7 semanas",
+          semanas_sem >= 2 ~ "2 a 3 semanas",
+          TRUE ~ "Em dia"
+        ),
+        situacao = factor(situacao, levels = c("Em dia", "2 a 3 semanas", "4 a 7 semanas", "8 semanas ou mais", "Nunca notificou"))
+      )
+  })
+
+  output$titulo_silencio <- renderText({
+    ultima <- ultima_semana_base()
+    paste0("Silêncio epidemiológico — municípios sem notificar (situação na SE ", ultima$semana, "/", ultima$ano, ")")
+  })
+
+  cores_silencio <- c(
+    "Em dia" = "#d4edda", "2 a 3 semanas" = "#fff3cd", "4 a 7 semanas" = "#ffe0b2",
+    "8 semanas ou mais" = "#f8d7da", "Nunca notificou" = "#e5e7eb"
+  )
+
+  output$resumo_silencio <- renderUI({
+    df <- silencio_municipios()
+    if (is.null(df) || nrow(df) == 0) {
+      return(NULL)
+    }
+    contagem <- table(df$situacao)
+    div(
+      class = "d-flex flex-wrap gap-2 mb-2",
+      lapply(names(contagem), function(nome) {
+        span(
+          class = "badge rounded-pill text-dark",
+          style = paste0("background:", cores_silencio[[nome]], "; font-size: 0.85rem; font-weight: 600;"),
+          paste0(nome, ": ", contagem[[nome]], " de ", nrow(df))
+        )
+      })
+    )
+  })
+
+  output$tabela_silencio <- DT::renderDT({
+    df <- silencio_municipios()
+    if (is.null(df)) {
+      df <- tibble::tibble(gve = character(), drs = character(), municipio = character(), ultima_notificacao = character(), semanas_sem = integer(), situacao = character())
+    }
+    tabela <- df %>%
+      filter(situacao != "Em dia") %>%
+      arrange(desc(is.na(semanas_sem)), desc(semanas_sem), municipio) %>%
+      transmute(
+        DRS = drs,
+        GVE = gve,
+        `Município` = municipio,
+        `Última notificação` = dplyr::coalesce(ultima_notificacao, "—"),
+        `Semanas sem notificar` = semanas_sem,
+        `Situação` = as.character(situacao)
+      )
+
+    DT::datatable(
+      tabela,
+      rownames = FALSE,
+      class = "compact stripe hover",
+      options = list(
+        pageLength = 10,
+        dom = "ftip",
+        scrollX = TRUE,
+        language = utils::modifyList(dt_idioma, list(zeroRecords = "Todos os municípios do território notificaram nas últimas 2 semanas"))
+      )
+    ) %>%
+      DT::formatStyle(
+        "Situação",
+        backgroundColor = DT::styleEqual(names(cores_silencio), unname(cores_silencio)),
+        fontWeight = "700"
+      )
+  }, server = FALSE)
 
   modelo_tendencia <- reactive({
     serie <- serie_semanal_atual() %>% arrange(semana)
@@ -927,29 +1353,35 @@ server <- function(input, output, session) {
         list(
           observado = tibble::tibble(semana = integer(), casos = numeric(), tendencia = numeric()),
           previsao = tibble::tibble(semana = integer(), previsto = numeric()),
+          incompleta = tibble::tibble(semana = integer(), casos = numeric()),
           slope = 0,
           semana_limite = 0
         )
       )
     }
 
-    semanas_validas <- serie$semana[serie$casos > 0]
-    semana_limite <- if (length(semanas_validas) > 0) max(semanas_validas) else max(serie$semana)
+    n_semanas <- nrow(serie)
+    semana_limite <- min(semana_final_ano(selected_year()), n_semanas)
+    # A semana em aberto fica fora do ajuste, senão a queda artificial puxa a tendência para baixo.
+    em_aberto <- semana_em_aberto(selected_year())
+    incompleta <- serie %>%
+      filter(semana %in% em_aberto, semana <= semana_limite) %>%
+      mutate(casos = tidyr::replace_na(casos, 0))
+    if (nrow(incompleta) > 0) {
+      semana_limite <- semana_limite - 1L
+    }
 
     observado <- serie %>%
-      filter(semana <= semana_limite)
-
-    if (nrow(observado) == 0) {
-      observado <- serie
-    }
+      filter(semana <= semana_limite) %>%
+      mutate(casos = tidyr::replace_na(casos, 0))
 
     if (nrow(observado) >= 8) {
       ajuste_modelo <- tryCatch(
-        stats::loess(casos ~ semana, data = observado, span = 0.35, degree = 1, family = "symmetric"),
+        suppressWarnings(stats::loess(casos ~ semana, data = observado, span = 0.35, degree = 1, family = "symmetric")),
         error = function(e) NULL
       )
       if (!is.null(ajuste_modelo)) {
-        observado$tendencia <- pmax(as.numeric(stats::predict(ajuste_modelo, newdata = observado)), 0)
+        observado$tendencia <- pmax(as.numeric(suppressWarnings(stats::predict(ajuste_modelo, newdata = observado))), 0)
         observado$tendencia[!is.finite(observado$tendencia)] <- observado$casos[!is.finite(observado$tendencia)]
       } else {
         observado$tendencia <- observado$casos
@@ -971,8 +1403,8 @@ server <- function(input, output, session) {
       }
     }
 
-    max_semana_previsao <- min(53, semana_limite + 8)
-    semanas_previsao <- if (semana_limite < 53) {
+    max_semana_previsao <- min(n_semanas, semana_limite + 8)
+    semanas_previsao <- if (semana_limite < n_semanas) {
       seq.int(semana_limite + 1, max_semana_previsao)
     } else {
       integer()
@@ -993,6 +1425,7 @@ server <- function(input, output, session) {
     list(
       observado = observado,
       previsao = previsao,
+      incompleta = incompleta,
       slope = slope,
       semana_limite = semana_limite
     )
@@ -1009,213 +1442,22 @@ server <- function(input, output, session) {
     )
   }
 
-  calc_auc <- function(prob, y_true) {
-    prob <- as.numeric(prob)
-    y_true <- as.integer(y_true)
-    valid <- is.finite(prob) & !is.na(y_true)
-    prob <- prob[valid]
-    y_true <- y_true[valid]
-
-    if (length(y_true) == 0 || length(unique(y_true)) < 2) {
-      return(NA_real_)
-    }
-
-    n_pos <- sum(y_true == 1)
-    n_neg <- sum(y_true == 0)
-    if (n_pos == 0 || n_neg == 0) {
-      return(NA_real_)
-    }
-
-    ranks <- rank(prob, ties.method = "average")
-    (sum(ranks[y_true == 1]) - (n_pos * (n_pos + 1) / 2)) / (n_pos * n_neg)
-  }
-
-  calc_class_metrics <- function(pred, obs, prob = NULL) {
-    pred <- as.integer(pred)
-    obs <- as.integer(obs)
-    valid <- !is.na(pred) & !is.na(obs)
-
-    pred <- pred[valid]
-    obs <- obs[valid]
-
-    n <- length(obs)
-    if (n == 0) {
-      return(list(
-        n = 0, tp = 0, fp = 0, tn = 0, fn = 0,
-        acuracia = NA_real_, precisao = NA_real_, sensibilidade = NA_real_,
-        especificidade = NA_real_, f1 = NA_real_, auc = NA_real_,
-        taxa_obs = NA_real_, taxa_prev = NA_real_
-      ))
-    }
-
-    tp <- sum(pred == 1 & obs == 1)
-    fp <- sum(pred == 1 & obs == 0)
-    tn <- sum(pred == 0 & obs == 0)
-    fn <- sum(pred == 0 & obs == 1)
-
-    acuracia <- (tp + tn) / n
-    precisao <- if ((tp + fp) > 0) tp / (tp + fp) else NA_real_
-    sensibilidade <- if ((tp + fn) > 0) tp / (tp + fn) else NA_real_
-    especificidade <- if ((tn + fp) > 0) tn / (tn + fp) else NA_real_
-    f1 <- if ((2 * tp + fp + fn) > 0) (2 * tp) / (2 * tp + fp + fn) else NA_real_
-    auc <- if (!is.null(prob)) calc_auc(prob[valid], obs) else NA_real_
-
-    list(
-      n = n, tp = tp, fp = fp, tn = tn, fn = fn,
-      acuracia = acuracia, precisao = precisao, sensibilidade = sensibilidade,
-      especificidade = especificidade, f1 = f1, auc = auc,
-      taxa_obs = mean(obs == 1), taxa_prev = mean(pred == 1)
-    )
-  }
-
-  backtest_ia <- reactive({
-    df_bt <- dados_filtrados_dimensoes() %>%
-      filter(ano != 2011) %>%
-      group_by(ano, semana) %>%
-      summarise(
-        casos = sum(casos, na.rm = TRUE),
-        surtos = sum(surtos, na.rm = TRUE),
-        .groups = "drop"
-      )
-
-    if (nrow(df_bt) == 0) {
-      return(
-        list(
-          predictions = tibble::tibble(),
-          metrics_global = calc_class_metrics(integer(), integer()),
-          metrics_year = tibble::tibble()
-        )
-      )
-    }
-
-    anos <- sort(unique(df_bt$ano))
-    anos_candidatos <- anos
-    if (length(anos) >= 3) {
-      anos_candidatos <- anos[anos < max(anos)]
-    }
-    anos_candidatos <- anos_candidatos[anos_candidatos > min(anos)]
-
-    if (length(anos_candidatos) == 0) {
-      return(
-        list(
-          predictions = tibble::tibble(),
-          metrics_global = calc_class_metrics(integer(), integer()),
-          metrics_year = tibble::tibble()
-        )
-      )
-    }
-
-    pred_list <- lapply(anos_candidatos, function(ano_ref) {
-      hist <- df_bt %>% filter(ano < ano_ref)
-      if (nrow(hist) == 0) {
-        return(NULL)
-      }
-
-      stats_hist <- hist %>%
-        group_by(semana) %>%
-        summarise(
-          media_hist = mean(casos, na.rm = TRUE),
-          dp_hist = stats::sd(casos, na.rm = TRUE),
-          .groups = "drop"
-        ) %>%
-        mutate(
-          dp_hist = tidyr::replace_na(dp_hist, 0),
-          ucl_hist = media_hist + 1.96 * dp_hist
-        )
-
-      serie_ref <- tibble::tibble(semana = 1:53) %>%
-        left_join(
-          df_bt %>% filter(ano == ano_ref) %>% select(semana, casos, surtos),
-          by = "semana"
-        ) %>%
-        mutate(
-          casos = tidyr::replace_na(casos, 0),
-          surtos = tidyr::replace_na(surtos, 0)
-        )
-
-      semana_limite <- suppressWarnings(max(serie_ref$semana[(serie_ref$casos > 0) | (serie_ref$surtos > 0)], na.rm = TRUE))
-      if (!is.finite(semana_limite)) {
-        semana_limite <- suppressWarnings(max(serie_ref$semana, na.rm = TRUE))
-      }
-      if (!is.finite(semana_limite)) {
-        return(NULL)
-      }
-
-      serie_ref <- serie_ref %>%
-        filter(semana <= semana_limite) %>%
-        left_join(stats_hist, by = "semana") %>%
-        mutate(
-          media_hist = tidyr::replace_na(media_hist, 0),
-          dp_hist = tidyr::replace_na(dp_hist, 0),
-          ucl_hist = dplyr::coalesce(ucl_hist, media_hist),
-          zscore = ifelse(dp_hist > 0, (casos - media_hist) / dp_hist, 0),
-          media_movel4 = roll_mean(casos, k = 4),
-          media_movel4_prev = dplyr::lag(media_movel4, n = 4, default = dplyr::first(media_movel4)),
-          crescimento = ifelse(media_movel4_prev > 0, (media_movel4 - media_movel4_prev) / media_movel4_prev, 0),
-          crescimento = tidyr::replace_na(crescimento, 0),
-          z_norm = pmin(pmax(zscore / 3, -2), 2),
-          cresc_norm = pmin(pmax(crescimento, -1), 2),
-          score_ia = 1.1 * z_norm + 0.8 * cresc_norm,
-          prob_surto = stats::plogis(score_ia),
-          alerta_previsto = prob_surto >= 0.70,
-          observado = ifelse((surtos > 0) | (casos > ucl_hist), 1L, 0L),
-          ano = ano_ref
-        ) %>%
-        select(ano, semana, casos, surtos, prob_surto, alerta_previsto, observado)
-
-      serie_ref
-    })
-
-    pred_all <- dplyr::bind_rows(pred_list)
-
-    if (nrow(pred_all) == 0) {
-      return(
-        list(
-          predictions = tibble::tibble(),
-          metrics_global = calc_class_metrics(integer(), integer()),
-          metrics_year = tibble::tibble()
-        )
-      )
-    }
-
-    metrics_global <- calc_class_metrics(
-      pred = pred_all$alerta_previsto,
-      obs = pred_all$observado,
-      prob = pred_all$prob_surto
-    )
-
-    metrics_year <- dplyr::bind_rows(lapply(sort(unique(pred_all$ano)), function(ano_i) {
-      df_i <- pred_all %>% filter(ano == ano_i)
-      m <- calc_class_metrics(df_i$alerta_previsto, df_i$observado, df_i$prob_surto)
-      tibble::tibble(
-        ano = ano_i,
-        semanas = m$n,
-        taxa_obs = m$taxa_obs,
-        taxa_prev = m$taxa_prev,
-        acuracia = m$acuracia,
-        precisao = m$precisao,
-        sensibilidade = m$sensibilidade,
-        f1 = m$f1,
-        auc = m$auc
-      )
-    }))
-
-    list(
-      predictions = pred_all,
-      metrics_global = metrics_global,
-      metrics_year = metrics_year
-    )
-  })
-
   motor_alerta_ia <- reactive({
     ano_ref <- selected_year()
     serie_atual <- serie_semanal_atual() %>% arrange(semana)
     tendencia <- modelo_tendencia()
 
+    n_semanas <- nrow(serie_atual)
+    anos_hist <- attr(canal_endemico(), "anos_historicos")
     historico <- dados_filtrados_dimensoes() %>%
-      filter(ano != ano_ref, ano != 2011) %>%
+      filter(ano %in% anos_hist) %>%
       group_by(ano, semana) %>%
       summarise(casos = sum(casos, na.rm = TRUE), .groups = "drop")
+    if (length(anos_hist) > 0) {
+      historico <- tidyr::expand_grid(ano = anos_hist, semana = seq_len(n_semanas)) %>%
+        left_join(historico, by = c("ano", "semana")) %>%
+        mutate(casos = tidyr::replace_na(casos, 0))
+    }
 
     historico_stats <- if (nrow(historico) == 0) {
       media_ref <- mean(serie_atual$casos, na.rm = TRUE)
@@ -1223,7 +1465,7 @@ server <- function(input, output, session) {
       if (!is.finite(media_ref)) media_ref <- 0
       if (!is.finite(dp_ref)) dp_ref <- 0
       tibble::tibble(
-        semana = 1:53,
+        semana = seq_len(n_semanas),
         media_hist = media_ref,
         dp_hist = dp_ref
       )
@@ -1238,7 +1480,7 @@ server <- function(input, output, session) {
         mutate(dp_hist = tidyr::replace_na(dp_hist, 0))
     }
 
-    observado <- tibble::tibble(semana = 1:53) %>%
+    observado <- tibble::tibble(semana = seq_len(n_semanas)) %>%
       left_join(serie_atual, by = "semana") %>%
       mutate(casos = tidyr::replace_na(casos, 0)) %>%
       left_join(historico_stats, by = "semana") %>%
@@ -1376,9 +1618,9 @@ server <- function(input, output, session) {
       if (ia$nivel %in% c("ALTO", "CRITICO")) {
         showNotification(
           paste0(
-            "Alerta preditivo IA (", ia$nivel, "): ",
+            "Índice de risco ", ia$nivel, ": ",
             ia$mensagem,
-            " Probabilidade atual: ",
+            " Índice atual: ",
             round(ia$prob * 100, 1), "%."
           ),
           type = "warning",
@@ -1404,7 +1646,8 @@ server <- function(input, output, session) {
         type = "scatter",
         mode = "lines",
         name = "Observado",
-        line = list(color = "#005ca9", width = 2.4)
+        line = list(color = "#005ca9", width = 2.4),
+        hovertemplate = "Observado: %{y:,.0f}<extra></extra>"
       ) %>%
       add_trace(
         data = modelo$observado,
@@ -1413,27 +1656,47 @@ server <- function(input, output, session) {
         type = "scatter",
         mode = "lines",
         name = "Tendência (LOESS)",
-        line = list(color = "#2e7d32", width = 2, dash = "dash")
+        line = list(color = "#2e7d32", width = 2, dash = "dash"),
+        hovertemplate = "Tendência: %{y:,.0f}<extra></extra>"
       )
 
     if (nrow(modelo$previsao) > 0) {
+      # A projeção parte do último ponto da tendência, para a linha ficar contínua.
+      ponto_partida <- modelo$observado %>%
+        utils::tail(1) %>%
+        transmute(semana, previsto = tendencia)
       p <- p %>%
         add_trace(
-          data = modelo$previsao,
+          data = bind_rows(ponto_partida, modelo$previsao),
           x = ~semana,
           y = ~previsto,
           type = "scatter",
           mode = "lines",
           name = "Projeção (8 semanas)",
-          line = list(color = "#ef6c00", width = 2.2, dash = "dot")
+          line = list(color = "#ef6c00", width = 2.2, dash = "dot"),
+          hovertemplate = "Projeção: %{y:,.0f}<extra></extra>"
+        )
+    }
+
+    if (nrow(modelo$incompleta) > 0) {
+      p <- p %>%
+        add_trace(
+          data = modelo$incompleta,
+          x = ~semana,
+          y = ~casos,
+          type = "scatter",
+          mode = "markers",
+          name = "Semana em aberto",
+          marker = list(color = "#ffffff", size = 9, line = list(color = "#005ca9", width = 2)),
+          hovertemplate = "Semana em aberto: %{y:,.0f}<extra></extra>"
         )
     }
 
     p %>%
       layout(
         hovermode = "x unified",
-        legend = list(orientation = "h", x = 0, y = 1.08),
-        margin = list(l = 55, r = 20, t = 10, b = 45),
+        legend = legenda_topo,
+        margin = list(l = 55, r = 15, t = 40, b = 50),
         plot_bgcolor = "rgba(245,245,245,0.5)",
         paper_bgcolor = "white",
         xaxis = list(title = "Semana epidemiológica", showgrid = TRUE, gridcolor = "#e5e7eb"),
@@ -1447,7 +1710,7 @@ server <- function(input, output, session) {
     fut <- motor$futuro
 
     if (nrow(obs) == 0) {
-      return(empty_plotly("Sem dados para o motor de alerta preditivo"))
+      return(empty_plotly("Sem dados para calcular o índice de risco"))
     }
 
     p <- plot_ly() %>%
@@ -1457,41 +1720,44 @@ server <- function(input, output, session) {
         y = ~prob_surto,
         type = "scatter",
         mode = "lines",
-        name = "Probabilidade observada",
-        line = list(color = "#6a1b9a", width = 2.4)
+        name = "Índice observado",
+        line = list(color = "#6a1b9a", width = 2.4),
+        hovertemplate = "Índice: %{y:.0%}<extra></extra>"
       ) %>%
       add_trace(
-        x = c(min(obs$semana), 53),
+        x = c(min(obs$semana), max(c(obs$semana, fut$semana))),
         y = c(0.70, 0.70),
         type = "scatter",
         mode = "lines",
         name = "Limiar de alerta (70%)",
-        line = list(color = "#d32f2f", dash = "dash", width = 1.7)
+        line = list(color = "#d32f2f", dash = "dash", width = 1.7),
+        hoverinfo = "skip"
       )
 
     if (nrow(fut) > 0) {
       p <- p %>%
         add_trace(
-          data = fut,
+          data = bind_rows(obs %>% utils::tail(1) %>% select(semana, prob_surto), fut %>% select(semana, prob_surto)),
           x = ~semana,
           y = ~prob_surto,
           type = "scatter",
           mode = "lines",
-          name = "Probabilidade prevista",
-          line = list(color = "#ef6c00", dash = "dot", width = 2.2)
+          name = "Índice projetado",
+          line = list(color = "#ef6c00", dash = "dot", width = 2.2),
+          hovertemplate = "Projetado: %{y:.0%}<extra></extra>"
         )
     }
 
     p %>%
       layout(
         hovermode = "x unified",
-        legend = list(orientation = "h", x = 0, y = 1.10),
-        margin = list(l = 55, r = 20, t = 10, b = 45),
+        legend = legenda_topo,
+        margin = list(l = 55, r = 15, t = 40, b = 50),
         plot_bgcolor = "rgba(245,245,245,0.5)",
         paper_bgcolor = "white",
         xaxis = list(title = "Semana epidemiológica", showgrid = TRUE, gridcolor = "#e5e7eb"),
         yaxis = list(
-          title = "Probabilidade de surto",
+          title = "Índice de risco (0 a 100%)",
           tickformat = ".0%",
           range = c(0, 1),
           showgrid = TRUE,
@@ -1500,27 +1766,49 @@ server <- function(input, output, session) {
       )
   })
 
+  # Sexo, faixa etária e ações só são registrados na base a partir de um certo ano.
+  # Os gráficos mostram só os casos com o campo preenchido e dizem a completude.
+  mensagem_sem_registro <- function(campo, primeiro_ano) {
+    if (is.na(primeiro_ano)) {
+      return(paste0("A base não tem registro de ", campo, "."))
+    }
+    paste0("Sem registro de ", campo, " no período.<br>O campo existe na base a partir de ", primeiro_ano, ".")
+  }
+
+  nota_completude <- function(informados, total) {
+    if (!is.finite(total) || total <= 0) {
+      return("")
+    }
+    pct <- informados / total * 100
+    paste0(
+      "Informado em ", format(round(pct, 1), decimal.mark = ","), "% dos casos (",
+      format(informados, big.mark = ".", decimal.mark = ","), " de ", format(total, big.mark = ".", decimal.mark = ","), ")"
+    )
+  }
+
+  anotacao_topo <- function(texto) {
+    list(list(
+      x = 0.01, y = 1.02, xref = "paper", yref = "paper",
+      xanchor = "left", yanchor = "bottom",
+      text = texto, showarrow = FALSE,
+      font = list(size = 11, color = "#52606d")
+    ))
+  }
+
   output$grafico_sexo <- renderPlotly({
     df <- dados_contexto_periodo()
-
-    if (nrow(df) == 0) {
-      return(empty_plotly("Sem dados de sexo para os filtros selecionados"))
-    }
-
     total_masc <- sum(df$sexo_masc, na.rm = TRUE)
     total_fem <- sum(df$sexo_fem, na.rm = TRUE)
     total_casos <- sum(df$casos, na.rm = TRUE)
-    total_nao_info <- pmax(total_casos - total_masc - total_fem, 0)
+
+    if (total_masc + total_fem <= 0) {
+      return(empty_plotly(mensagem_sem_registro("sexo", primeiro_ano_detalhes()$sexo)))
+    }
 
     sexo_df <- tibble::tibble(
-      sexo = c("Masculino", "Feminino", "Não informado"),
-      casos = c(total_masc, total_fem, total_nao_info)
-    ) %>%
-      filter(casos > 0)
-
-    if (nrow(sexo_df) == 0) {
-      return(empty_plotly("Sem registros de sexo no período selecionado"))
-    }
+      sexo = c("Masculino", "Feminino"),
+      casos = c(total_masc, total_fem)
+    )
 
     plot_ly(
       sexo_df,
@@ -1528,27 +1816,23 @@ server <- function(input, output, session) {
       values = ~casos,
       type = "pie",
       hole = 0.45,
-      marker = list(colors = c("#1976d2", "#ec407a", "#90a4ae"))
+      sort = FALSE,
+      marker = list(colors = c("#1976d2", "#ec407a"))
     ) %>%
       layout(
-        margin = list(l = 20, r = 20, t = 10, b = 10),
+        separators = ",.",
+        margin = list(l = 20, r = 20, t = 30, b = 10),
         showlegend = TRUE,
         legend = list(orientation = "h", x = 0, y = -0.05),
-        paper_bgcolor = "white"
+        paper_bgcolor = "white",
+        annotations = anotacao_topo(nota_completude(total_masc + total_fem, total_casos))
       )
   })
 
-  resumo_faixa_etaria <- reactive({
+  output$grafico_faixa_etaria <- renderPlotly({
     df <- dados_contexto_periodo()
-
     faixas <- c("< 1 ano", "1 a 4", "5 a 9", "10 a 14", "15+")
-    zero_tbl <- tibble::tibble(faixa = faixas, casos = 0, origem = "sem_dados")
-
-    if (nrow(df) == 0) {
-      return(zero_tbl)
-    }
-
-    valores_observados <- c(
+    valores <- c(
       sum(df$fx_menor1, na.rm = TRUE),
       sum(df$fx_1a4, na.rm = TRUE),
       sum(df$fx_5a9, na.rm = TRUE),
@@ -1556,64 +1840,35 @@ server <- function(input, output, session) {
       sum(df$fx_15mais, na.rm = TRUE)
     )
 
-    total_observado <- sum(valores_observados, na.rm = TRUE)
-    if (is.finite(total_observado) && total_observado > 0) {
-      return(tibble::tibble(faixa = faixas, casos = valores_observados, origem = "observado"))
+    if (sum(valores) <= 0) {
+      return(empty_plotly(mensagem_sem_registro("faixa etária", primeiro_ano_detalhes()$faixa)))
     }
 
-    zero_tbl
-  })
-
-  output$grafico_faixa_etaria <- renderPlotly({
-    faixa_df <- resumo_faixa_etaria()
-    if (nrow(faixa_df) == 0 || sum(faixa_df$casos, na.rm = TRUE) <= 0) {
-      return(empty_plotly("Sem dados de faixa etária para os filtros selecionados"))
-    }
-
-    origem <- as.character(faixa_df$origem[1])
-    anotacao <- switch(
-      origem,
-      observado = "Faixas etárias observadas na base",
-      "Faixas etárias sem dados observados no recorte atual"
-    )
+    faixa_df <- tibble::tibble(faixa = factor(faixas, levels = faixas), casos = valores)
 
     plot_ly(
       faixa_df,
       x = ~faixa,
       y = ~casos,
       type = "bar",
-      marker = list(color = c("#90caf9", "#64b5f6", "#42a5f5", "#1e88e5", "#0d47a1")),
-      name = "Casos"
+      marker = list(color = "#1e88e5"),
+      name = "Casos",
+      hovertemplate = "%{x}: %{y:,.0f} casos<extra></extra>"
     ) %>%
       layout(
+        separators = ",.",
         showlegend = FALSE,
-        margin = list(l = 55, r = 20, t = 10, b = 45),
+        margin = list(l = 55, r = 15, t = 30, b = 50),
         plot_bgcolor = "rgba(245,245,245,0.5)",
         paper_bgcolor = "white",
-        xaxis = list(title = "Faixa etária", showgrid = FALSE),
+        xaxis = list(title = "Faixa etária (anos)", showgrid = FALSE),
         yaxis = list(title = "Casos", showgrid = TRUE, gridcolor = "#e5e7eb"),
-        annotations = list(
-          list(
-            x = 0.01,
-            y = 1.12,
-            xref = "paper",
-            yref = "paper",
-            xanchor = "left",
-            yanchor = "bottom",
-            text = anotacao,
-            showarrow = FALSE,
-            font = list(size = 11, color = "#52606d")
-          )
-        )
+        annotations = anotacao_topo(nota_completude(sum(valores), sum(df$casos, na.rm = TRUE)))
       )
   })
 
   output$grafico_acoes_treinamentos <- renderPlotly({
     df <- dados_contexto_periodo()
-
-    if (nrow(df) == 0) {
-      return(empty_plotly("Sem dados de ações para os filtros selecionados"))
-    }
 
     acoes_df <- tibble::tibble(
       acao = c("Ações educativas", "Treinamentos", "Coleta de material", "Encaminhamentos"),
@@ -1626,81 +1881,58 @@ server <- function(input, output, session) {
     )
 
     if (sum(acoes_df$quantidade, na.rm = TRUE) <= 0) {
-      return(empty_plotly("Sem registros de ações no período selecionado"))
+      return(empty_plotly(mensagem_sem_registro("ações", primeiro_ano_detalhes()$acoes)))
     }
 
+    acoes_df <- acoes_df %>% arrange(quantidade)
     plot_ly(
       acoes_df,
-      x = ~reorder(acao, quantidade),
-      y = ~quantidade,
+      x = ~quantidade,
+      y = ~factor(acao, levels = acao),
       type = "bar",
-      orientation = "v",
-      marker = list(color = c("#43a047", "#00897b", "#7cb342", "#5e35b1")),
-      name = "Quantidade"
+      orientation = "h",
+      marker = list(color = "#00897b"),
+      name = "Quantidade",
+      text = ~format(quantidade, big.mark = ".", decimal.mark = ","),
+      textposition = "outside",
+      cliponaxis = FALSE,
+      hovertemplate = "%{y}: %{x:,.0f}<extra></extra>"
     ) %>%
       layout(
         showlegend = FALSE,
-        margin = list(l = 55, r = 20, t = 10, b = 90),
+        margin = list(l = 10, r = 30, t = 10, b = 45),
         plot_bgcolor = "rgba(245,245,245,0.5)",
         paper_bgcolor = "white",
-        xaxis = list(title = "Tipo de ação", tickangle = 20, showgrid = FALSE),
-        yaxis = list(title = "Quantidade", showgrid = TRUE, gridcolor = "#e5e7eb")
+        xaxis = list(title = "Quantidade no período", showgrid = TRUE, gridcolor = "#e5e7eb", range = c(0, max(acoes_df$quantidade) * 1.15)),
+        yaxis = list(title = "", showgrid = FALSE, automargin = TRUE)
       )
   })
 
-  safe_weighted_mean <- function(x, w) {
-    valid <- is.finite(x) & is.finite(w) & w > 0
-    if (!any(valid)) {
-      return(mean(x, na.rm = TRUE))
+  # Faixas do mapa por quintis da incidência das áreas exibidas: a escala se ajusta
+  # ao período (semanas, ano ou média anual) em vez de usar cortes fixos.
+  faixas_incidencia <- function(incidencia) {
+    valores <- incidencia[is.finite(incidencia)]
+    if (length(valores) < 5) {
+      cortes <- c(100, 300, 600, 1000)
+    } else {
+      cortes <- unique(signif(stats::quantile(valores, c(0.2, 0.4, 0.6, 0.8), names = FALSE), 2))
+      cortes <- cortes[cortes > 0]
+      if (length(cortes) == 0) cortes <- max(valores)
     }
-    stats::weighted.mean(x[valid], w[valid], na.rm = TRUE)
-  }
-
-  incidencia_faixas <- c(
-    "Sem dados",
-    "Muito baixa (<50)",
-    "Baixa (50 a <100)",
-    "Moderada (100 a <300)",
-    "Alta (300 a <500)",
-    "Muito alta (>=500)"
-  )
-
-  classificar_faixa_incidencia <- function(incidencia) {
-    dplyr::case_when(
-      !is.finite(incidencia) ~ "Sem dados",
-      incidencia < 50 ~ "Muito baixa (<50)",
-      incidencia < 100 ~ "Baixa (50 a <100)",
-      incidencia < 300 ~ "Moderada (100 a <300)",
-      incidencia < 500 ~ "Alta (300 a <500)",
-      TRUE ~ "Muito alta (>=500)"
-    )
-  }
-
-  first_non_empty <- function(x) {
-    x <- as.character(x)
-    x <- trimws(x)
-    x <- x[!is.na(x) & x != "" & tolower(x) != "na"]
-    if (length(x) == 0) {
-      return(NA_character_)
+    fmt <- function(x) {
+      vapply(x, function(v) format(v, big.mark = ".", decimal.mark = ",", scientific = FALSE, trim = TRUE), character(1))
     }
-    x[1]
+    rotulos <- c(
+      paste0("< ", fmt(cortes[1])),
+      if (length(cortes) > 1) paste0(fmt(utils::head(cortes, -1)), " a < ", fmt(cortes[-1])),
+      paste0("\u2265 ", fmt(cortes[length(cortes)]))
+    )
+    list(cortes = cortes, rotulos = rotulos)
   }
 
-  extract_numeric_geo_key <- function(values, level = c("gve", "drs")) {
-    level <- match.arg(level)
-    values_norm <- normalize_key(values)
-    has_num <- grepl("\\d+", values_norm)
-
-    nums <- ifelse(
-      has_num,
-      suppressWarnings(as.integer(sub(".*?(\\d+).*", "\\1", values_norm))),
-      NA_integer_
-    )
-
-    out <- rep(NA_character_, length(values_norm))
-    valid <- !is.na(nums)
-    out[valid] <- paste(level, nums[valid])
-    out
+  classificar_faixa <- function(incidencia, faixas) {
+    classe <- findInterval(incidencia, faixas$cortes) + 1
+    ifelse(is.finite(incidencia), faixas$rotulos[classe], "Sem população")
   }
 
   nivel_mapa_atual <- reactive({
@@ -1708,7 +1940,31 @@ server <- function(input, output, session) {
     if (is.null(nivel) || !(nivel %in% c("municipio", "gve", "drs"))) {
       return("municipio")
     }
+    if (is_municipio_selected()) {
+      return("municipio")
+    }
+    if (nivel == "drs" && !is.null(input$filtro_gve) && input$filtro_gve != "Todas") {
+      return("gve")
+    }
     nivel
+  })
+
+  # População de cada município somada nos anos do período (pessoas-ano).
+  # Com "Todos", a incidência vira média anual.
+  populacao_municipios <- function(anos) {
+    pop <- load_populacao_ibge()
+    anos_ref <- pmin(pmax(as.integer(anos), min(pop$ano)), max(pop$ano))
+    tibble::tibble(ano = anos_ref) %>%
+      inner_join(pop %>% select(cod_ibge, ano, populacao), by = "ano", relationship = "many-to-many") %>%
+      group_by(cod_ibge) %>%
+      summarise(populacao = sum(populacao, na.rm = TRUE), .groups = "drop")
+  }
+
+  # Janela das "últimas 4 semanas": as 4 semanas mais recentes do ano de referência.
+  janela_4_semanas <- reactive({
+    ano_ref <- selected_year()
+    semanas <- intervalo_semanas(ano_ref)
+    list(ano = ano_ref, inicio = max(semanas[1], semanas[2] - 3L), fim = semanas[2])
   })
 
   resumo_municipios <- reactive({
@@ -1723,24 +1979,21 @@ server <- function(input, output, session) {
           populacao = numeric(),
           incidencia = numeric(),
           status_surto = character(),
-          faixa_incidencia = character()
         )
       )
     }
 
     df %>%
-      group_by(municipio) %>%
+      group_by(municipio, cod_ibge) %>%
       summarise(
         casos = sum(casos, na.rm = TRUE),
         surtos = sum(surtos, na.rm = TRUE),
-        populacao = max(populacao, na.rm = TRUE),
         .groups = "drop"
       ) %>%
+      left_join(populacao_municipios(anos_periodo()), by = "cod_ibge") %>%
       mutate(
-        populacao = ifelse(is.infinite(populacao) | populacao <= 0, NA_real_, populacao),
         incidencia = ifelse(populacao > 0, (casos / populacao) * 100000, NA_real_),
-        status_surto = ifelse(surtos > 0, "Em surto", "Sem surto"),
-        faixa_incidencia = classificar_faixa_incidencia(incidencia)
+        status_surto = ifelse(surtos > 0, "Em surto", "Sem surto")
       ) %>%
       arrange(desc(incidencia), desc(casos), municipio)
   })
@@ -1785,24 +2038,16 @@ server <- function(input, output, session) {
       )
     }
 
-    semana_limite <- suppressWarnings(max(df$semana[df$casos > 0], na.rm = TRUE))
-    if (!is.finite(semana_limite)) {
-      semana_limite <- suppressWarnings(max(df$semana, na.rm = TRUE))
-    }
-    if (!is.finite(semana_limite)) {
-      semana_limite <- 53
-    }
-    semana_inicio <- max(1, as.integer(semana_limite) - 3)
+    janela <- janela_4_semanas()
+    df_4s <- dados_filtrados_dimensoes() %>%
+      filter(ano == janela$ano, semana >= janela$inicio, semana <= janela$fim)
+    rotulo_ano <- if (todos_anos) "Todos" else as.character(selected_year())
 
     if (municipio_especifico) {
       resumo_ano <- df %>%
         mutate(
-          unidade_saude = ifelse(
-            is.na(unidade_saude) | trimws(unidade_saude) == "",
-            "Não informado",
-            unidade_saude
-          ),
-          ano = if (todos_anos) "Todos" else as.character(ano)
+          unidade_saude = dplyr::coalesce(dplyr::na_if(trimws(as.character(unidade_saude)), ""), "Não informado"),
+          ano = rotulo_ano
         ) %>%
         group_by(gve, municipio, unidade_saude, ano) %>%
         summarise(
@@ -1811,16 +2056,11 @@ server <- function(input, output, session) {
           .groups = "drop"
         )
 
-      resumo_4s <- df %>%
+      resumo_4s <- df_4s %>%
         mutate(
-          unidade_saude = ifelse(
-            is.na(unidade_saude) | trimws(unidade_saude) == "",
-            "Não informado",
-            unidade_saude
-          ),
-          ano = if (todos_anos) "Todos" else as.character(ano)
+          unidade_saude = dplyr::coalesce(dplyr::na_if(trimws(as.character(unidade_saude)), ""), "Não informado"),
+          ano = rotulo_ano
         ) %>%
-        filter(semana >= semana_inicio, semana <= semana_limite) %>%
         group_by(gve, municipio, unidade_saude, ano) %>%
         summarise(
           total_4s = sum(casos, na.rm = TRUE),
@@ -1832,8 +2072,8 @@ server <- function(input, output, session) {
         mutate(total_4s = tidyr::replace_na(total_4s, 0)) %>%
         group_by(ano) %>%
         mutate(
-          part_ano_pct = ifelse(sum(total_ano, na.rm = TRUE) > 0, (total_ano / sum(total_ano, na.rm = TRUE)) * 100, 0),
-          part_4s_pct = ifelse(sum(total_4s, na.rm = TRUE) > 0, (total_4s / sum(total_4s, na.rm = TRUE)) * 100, 0)
+          part_ano_pct = if (sum(total_ano, na.rm = TRUE) > 0) total_ano / sum(total_ano, na.rm = TRUE) * 100 else 0,
+          part_4s_pct = if (sum(total_4s, na.rm = TRUE) > 0) total_4s / sum(total_4s, na.rm = TRUE) * 100 else 0
         ) %>%
         ungroup()
 
@@ -1851,37 +2091,38 @@ server <- function(input, output, session) {
         resumo %>%
           mutate(
             alerta_flag = ifelse(surtos > 0 | total_4s >= limiar_alerta_unidade, 1L, 0L),
-            alerta = ifelse(alerta_flag == 1L, "ALERTA", "ESTÁVEL")
+            alerta = ifelse(alerta_flag == 1L, "Alerta", "Estável")
           ) %>%
           arrange(desc(alerta_flag), desc(total_4s), desc(total_ano), unidade_saude)
       )
     }
 
     resumo_ano <- df %>%
-      mutate(ano = if (todos_anos) "Todos" else as.character(ano)) %>%
-      group_by(gve, municipio, ano) %>%
+      mutate(ano = rotulo_ano) %>%
+      group_by(gve, municipio, cod_ibge, ano) %>%
       summarise(
-        populacao = max(populacao, na.rm = TRUE),
         total_ano = sum(casos, na.rm = TRUE),
         surtos = sum(surtos, na.rm = TRUE),
         .groups = "drop"
       )
 
-    resumo_4s <- df %>%
-      mutate(ano = if (todos_anos) "Todos" else as.character(ano)) %>%
-      filter(semana >= semana_inicio, semana <= semana_limite) %>%
-      group_by(gve, municipio, ano) %>%
+    resumo_4s <- df_4s %>%
+      group_by(gve, municipio, cod_ibge) %>%
       summarise(
         total_4s = sum(casos, na.rm = TRUE),
         .groups = "drop"
       )
 
+    pop_periodo <- populacao_municipios(anos_periodo()) %>% rename(pop_periodo = populacao)
+    pop_ref <- populacao_municipios(janela$ano)
+
     resumo <- resumo_ano %>%
-      left_join(resumo_4s, by = c("gve", "municipio", "ano")) %>%
+      left_join(resumo_4s, by = c("gve", "municipio", "cod_ibge")) %>%
+      left_join(pop_periodo, by = "cod_ibge") %>%
+      left_join(pop_ref, by = "cod_ibge") %>%
       mutate(
         total_4s = tidyr::replace_na(total_4s, 0),
-        populacao = ifelse(is.infinite(populacao) | populacao <= 0, NA_real_, populacao),
-        incidencia_anual = ifelse(populacao > 0, (total_ano / populacao) * 100000, NA_real_),
+        incidencia_anual = ifelse(pop_periodo > 0, (total_ano / pop_periodo) * 100000, NA_real_),
         incidencia_4s = ifelse(populacao > 0, (total_4s / populacao) * 100000, NA_real_)
       )
 
@@ -1898,10 +2139,19 @@ server <- function(input, output, session) {
     resumo %>%
       mutate(
         alerta_flag = ifelse(surtos > 0 | (is.finite(incidencia_4s) & incidencia_4s >= limiar_alerta), 1L, 0L),
-        alerta = ifelse(alerta_flag == 1L, "ALERTA", "ESTÁVEL")
+        alerta = ifelse(alerta_flag == 1L, "Alerta", "Estável")
       ) %>%
       arrange(desc(alerta_flag), desc(incidencia_4s), desc(total_4s), municipio)
   })
+
+  dt_idioma <- list(
+    search = "Buscar:",
+    info = "_START_ a _END_ de _TOTAL_ linhas",
+    infoEmpty = "Nenhuma linha",
+    infoFiltered = "(filtrado de _MAX_)",
+    zeroRecords = "Nenhum registro encontrado",
+    paginate = list(previous = "Anterior", `next` = "Próxima")
+  )
 
   output$tabela_municipios <- DT::renderDT({
     tabela_base <- tabela_operacional_municipios()
@@ -1910,16 +2160,16 @@ server <- function(input, output, session) {
     if (municipio_especifico) {
       tabela <- tabela_base %>%
         transmute(
-          GVE = toupper(gve),
-          MUNICIPIO = toupper(municipio),
-          UNIDADE_SAUDE = toupper(unidade_saude),
-          ANO = as.character(ano),
-          TOTAL_ANO = total_ano,
-          PART_ANO_PCT = round(part_ano_pct, 1),
-          TOTAL_4S = total_4s,
-          PART_4S_PCT = round(part_4s_pct, 1),
-          SURTOS = surtos,
-          ALERTA = alerta,
+          GVE = gve,
+          `Município` = municipio,
+          `Unidade de saúde` = unidade_saude,
+          `Período` = as.character(ano),
+          `Casos no período` = total_ano,
+          `% no período` = round(part_ano_pct, 1),
+          `Casos últimas 4 sem.` = total_4s,
+          `% últimas 4 sem.` = round(part_4s_pct, 1),
+          Surtos = surtos,
+          `Situação` = alerta,
           alerta_flag = alerta_flag
         )
 
@@ -1932,31 +2182,33 @@ server <- function(input, output, session) {
             pageLength = 12,
             lengthMenu = c(12, 25, 50, 100),
             autoWidth = TRUE,
+            scrollX = TRUE,
             order = list(list(10, "desc"), list(6, "desc"), list(4, "desc")),
-            dom = "tip",
+            dom = "ftip",
+            language = dt_idioma,
             columnDefs = list(
               list(visible = FALSE, targets = 10)
             )
           )
         ) %>%
           DT::formatCurrency(
-            columns = c("TOTAL_ANO", "TOTAL_4S", "SURTOS"),
+            columns = c("Casos no período", "Casos últimas 4 sem.", "Surtos"),
             currency = "",
             interval = 3,
             mark = ".",
             dec.mark = ",",
             digits = 0
           ) %>%
-          DT::formatRound(columns = c("PART_ANO_PCT", "PART_4S_PCT"), digits = 1) %>%
+          DT::formatRound(columns = c("% no período", "% últimas 4 sem."), digits = 1, dec.mark = ",") %>%
           DT::formatStyle(
-            "PART_4S_PCT",
+            "% últimas 4 sem.",
             valueColumns = "alerta_flag",
             backgroundColor = DT::styleEqual(c(1, 0), c("#f8d7da", "#d4edda")),
             color = DT::styleEqual(c(1, 0), c("#7f1d1d", "#14532d")),
             fontWeight = "700"
           ) %>%
           DT::formatStyle(
-            "ALERTA",
+            "Situação",
             valueColumns = "alerta_flag",
             backgroundColor = DT::styleEqual(c(1, 0), c("#f8d7da", "#d4edda")),
             color = DT::styleEqual(c(1, 0), c("#7f1d1d", "#14532d")),
@@ -1967,15 +2219,15 @@ server <- function(input, output, session) {
 
     tabela <- tabela_base %>%
       transmute(
-        GVE = toupper(gve),
-        MUNICIPIO = toupper(municipio),
-        ANO = as.character(ano),
-        POPULACAO = populacao,
-        TOTAL_ANO = total_ano,
-        INCID_ANUAL = round(incidencia_anual, 2),
-        TOTAL_4S = total_4s,
-        INCID_4S = round(incidencia_4s, 2),
-        ALERTA = alerta,
+        GVE = gve,
+        `Município` = municipio,
+        `Período` = as.character(ano),
+        `População (IBGE)` = populacao,
+        `Casos no período` = total_ano,
+        `Incidência no período` = round(incidencia_anual, 2),
+        `Casos últimas 4 sem.` = total_4s,
+        `Incidência últimas 4 sem.` = round(incidencia_4s, 2),
+        `Situação` = alerta,
         alerta_flag = alerta_flag
       )
 
@@ -1987,15 +2239,17 @@ server <- function(input, output, session) {
         pageLength = 12,
         lengthMenu = c(12, 25, 50, 100),
         autoWidth = TRUE,
+        scrollX = TRUE,
         order = list(list(9, "desc"), list(7, "desc"), list(6, "desc")),
-        dom = "tip",
+        dom = "ftip",
+        language = dt_idioma,
         columnDefs = list(
           list(visible = FALSE, targets = 9)
         )
       )
     ) %>%
       DT::formatCurrency(
-        columns = c("POPULACAO", "TOTAL_ANO", "TOTAL_4S"),
+        columns = c("População (IBGE)", "Casos no período", "Casos últimas 4 sem."),
         currency = "",
         interval = 3,
         mark = ".",
@@ -2003,7 +2257,7 @@ server <- function(input, output, session) {
         digits = 0
       ) %>%
       DT::formatCurrency(
-        columns = c("INCID_ANUAL", "INCID_4S"),
+        columns = c("Incidência no período", "Incidência últimas 4 sem."),
         currency = "",
         interval = 3,
         mark = ".",
@@ -2011,14 +2265,14 @@ server <- function(input, output, session) {
         digits = 2
       ) %>%
       DT::formatStyle(
-        "INCID_4S",
+        "Incidência últimas 4 sem.",
         valueColumns = "alerta_flag",
         backgroundColor = DT::styleEqual(c(1, 0), c("#f8d7da", "#d4edda")),
         color = DT::styleEqual(c(1, 0), c("#7f1d1d", "#14532d")),
         fontWeight = "700"
       ) %>%
       DT::formatStyle(
-        "ALERTA",
+        "Situação",
         valueColumns = "alerta_flag",
         backgroundColor = DT::styleEqual(c(1, 0), c("#f8d7da", "#d4edda")),
         color = DT::styleEqual(c(1, 0), c("#7f1d1d", "#14532d")),
@@ -2026,469 +2280,264 @@ server <- function(input, output, session) {
       )
   }, server = FALSE)
 
+  # Indicadores por área do mapa. Em GVE e DRS, a população é a soma dos municípios
+  # da área que notificam nesta base.
   dados_mapa_nivel <- reactive({
     df <- dados_contexto_periodo()
     nivel <- nivel_mapa_atual()
 
+    vazio <- tibble::tibble(
+      rotulo = character(), map_key = character(), casos = numeric(), surtos = numeric(),
+      populacao = numeric(), incidencia = numeric(), status_surto = character()
+    )
     if (nrow(df) == 0) {
-      return(
-        tibble::tibble(
-          rotulo = character(),
-          map_key = character(),
-          map_key_alt = character(),
-          casos = numeric(),
-          surtos = numeric(),
-          populacao = numeric(),
-          incidencia = numeric(),
-          status_surto = character(),
-          faixa_incidencia = character()
-        )
-      )
+      return(vazio)
     }
-
-    base_pop <- df %>%
-      group_by(drs, gve, municipio) %>%
-      summarise(populacao = suppressWarnings(max(populacao, na.rm = TRUE)), .groups = "drop") %>%
-      mutate(populacao = ifelse(is.infinite(populacao) | populacao <= 0, NA_real_, populacao))
 
     if (nivel == "municipio") {
       return(
         resumo_municipios() %>%
-          mutate(
-            rotulo = municipio,
-            map_key = normalize_shape_key(rotulo, level = "municipio"),
-            map_key_alt = normalize_key(rotulo)
-          ) %>%
-          select(rotulo, map_key, map_key_alt, casos, surtos, populacao, incidencia, status_surto, faixa_incidencia)
+          filter(!is.na(cod_ibge)) %>%
+          transmute(rotulo = municipio, map_key = cod_ibge, casos, surtos, populacao, incidencia, status_surto)
       )
     }
 
-    if (nivel == "gve") {
-      casos_nivel <- df %>%
-        group_by(gve) %>%
-        summarise(
-          casos = sum(casos, na.rm = TRUE),
-          surtos = sum(surtos, na.rm = TRUE),
-          gve_codigo = first_non_empty(gve_codigo),
-          .groups = "drop"
-        )
-
-      pop_nivel <- base_pop %>%
-        group_by(gve) %>%
-        summarise(populacao = sum(populacao, na.rm = TRUE), .groups = "drop")
-
-      return(
-        casos_nivel %>%
-          left_join(pop_nivel, by = "gve") %>%
-          mutate(
-            populacao = ifelse(populacao <= 0, NA_real_, populacao),
-            incidencia = ifelse(populacao > 0, (casos / populacao) * 100000, NA_real_),
-            status_surto = ifelse(surtos > 0, "Em surto", "Sem surto"),
-            faixa_incidencia = classificar_faixa_incidencia(incidencia),
-            rotulo = gve,
-            map_key_nome = normalize_shape_key(rotulo, level = "gve"),
-            map_key_codigo = normalize_shape_key(gve_codigo, level = "gve"),
-            map_key_num = extract_numeric_geo_key(rotulo, level = "gve"),
-            map_key = dplyr::coalesce(map_key_codigo, map_key_num, map_key_nome),
-            map_key_alt = dplyr::coalesce(map_key_nome, map_key_num, map_key_codigo)
-          ) %>%
-          select(rotulo, map_key, map_key_alt, casos, surtos, populacao, incidencia, status_surto, faixa_incidencia)
-      )
-    }
-
-    casos_nivel <- df %>%
-      group_by(drs) %>%
-      summarise(
-        casos = sum(casos, na.rm = TRUE),
-        surtos = sum(surtos, na.rm = TRUE),
-        drs_codigo = first_non_empty(drs_codigo),
-        .groups = "drop"
-      )
-
-    pop_nivel <- base_pop %>%
-      group_by(drs) %>%
-      summarise(populacao = sum(populacao, na.rm = TRUE), .groups = "drop")
-
-    casos_nivel %>%
-      left_join(pop_nivel, by = "drs") %>%
+    indicadores_por_area(nivel) %>%
       mutate(
-        populacao = ifelse(populacao <= 0, NA_real_, populacao),
-        incidencia = ifelse(populacao > 0, (casos / populacao) * 100000, NA_real_),
         status_surto = ifelse(surtos > 0, "Em surto", "Sem surto"),
-        faixa_incidencia = classificar_faixa_incidencia(incidencia),
-        rotulo = drs,
-        map_key_nome = normalize_shape_key(rotulo, level = "drs"),
-        map_key_codigo = normalize_shape_key(drs_codigo, level = "drs"),
-        map_key_num = extract_numeric_geo_key(rotulo, level = "drs"),
-        map_key = dplyr::coalesce(map_key_codigo, map_key_num, map_key_nome),
-        map_key_alt = dplyr::coalesce(map_key_nome, map_key_num, map_key_codigo)
+        rotulo = area,
+        map_key = normalize_shape_key(area, level = nivel)
       ) %>%
-      select(rotulo, map_key, map_key_alt, casos, surtos, populacao, incidencia, status_surto, faixa_incidencia)
-  })
-
-  pontos_base_mapa <- reactive({
-    nivel <- nivel_mapa_atual()
-    df_filtrado <- dados_contexto_periodo()
-
-    base <- df_filtrado %>%
-      group_by(drs, gve, municipio) %>%
-      summarise(populacao = suppressWarnings(max(populacao, na.rm = TRUE)), .groups = "drop") %>%
-      mutate(populacao = ifelse(is.infinite(populacao) | populacao <= 0, NA_real_, populacao)) %>%
-      left_join(get_municipio_coords(df_filtrado$municipio), by = "municipio") %>%
-      filter(is.finite(lat), is.finite(lng))
-
-    if (nrow(base) == 0) {
-      return(tibble::tibble(rotulo = character(), lat = numeric(), lng = numeric()))
-    }
-
-    if (nivel == "municipio") {
-      return(
-        base %>%
-          group_by(municipio) %>%
-          summarise(
-            lat = mean(lat, na.rm = TRUE),
-            lng = mean(lng, na.rm = TRUE),
-            .groups = "drop"
-          ) %>%
-          transmute(rotulo = municipio, lat, lng)
-      )
-    }
-
-    if (nivel == "gve") {
-      return(
-        base %>%
-          group_by(gve) %>%
-          summarise(
-            lat = safe_weighted_mean(lat, populacao),
-            lng = safe_weighted_mean(lng, populacao),
-            .groups = "drop"
-          ) %>%
-          transmute(rotulo = gve, lat, lng)
-      )
-    }
-
-    base %>%
-      group_by(drs) %>%
-      summarise(
-        lat = safe_weighted_mean(lat, populacao),
-        lng = safe_weighted_mean(lng, populacao),
-        .groups = "drop"
-      ) %>%
-      transmute(rotulo = drs, lat, lng)
+      select(rotulo, map_key, casos, surtos, populacao, incidencia, status_surto)
   })
 
   output$fonte_geografica <- renderText({
-    nivel <- nivel_mapa_atual()
-    shape_local <- get_local_shape_layer(nivel)
-
-    if (!is.null(shape_local)) {
-      shp_name <- basename(attr(shape_local, "shape_path"))
-      return(paste("Fonte geográfica: shape local (", shp_name, ")", sep = ""))
+    shape <- get_local_shape_layer(nivel_mapa_atual())
+    if (is.null(shape)) {
+      return("Shapefile não encontrado")
     }
-
-    if (nivel == "municipio") {
-      shp_muni_fallback <- get_sp_municipality_shapes()
-      if (!is.null(shp_muni_fallback) && nrow(shp_muni_fallback) > 0) {
-        return("Fonte geográfica: geobr (fallback)")
-      }
-    }
-
-    "Fonte geográfica: pontos estimados (sem shape)"
+    paste0("Malha: ", basename(attr(shape, "shape_path")))
   })
 
+  cores_faixas <- c("#dbeafe", "#93c5fd", "#3b82f6", "#1d4ed8", "#1e3a8a")
+
+  # O mapa base é desenhado uma vez; filtros só trocam as camadas (mantém zoom e posição).
+  limites_sp <- c(-53.11, -25.31, -44.16, -19.78)
+
+  territorio_filtrado <- reactive({
+    any(c(
+      !is.null(input$filtro_drs) && input$filtro_drs != "Todas",
+      !is.null(input$filtro_gve) && input$filtro_gve != "Todas",
+      is_municipio_selected()
+    ))
+  })
+
+  # Municípios oficiais do território escolhido, tenham ou não notificado.
+  municipios_do_territorio <- reactive({
+    ref <- territorios_disponiveis()
+    if (!is.null(input$filtro_drs) && input$filtro_drs != "Todas") {
+      ref <- ref %>% filter(drs == input$filtro_drs)
+    }
+    if (!is.null(input$filtro_gve) && input$filtro_gve != "Todas") {
+      ref <- ref %>% filter(gve == input$filtro_gve)
+    }
+    if (is_municipio_selected()) {
+      ref <- ref %>% filter(municipio == input$filtro_municipio)
+    }
+    ref
+  })
+
+  codigos_do_territorio <- reactive({
+    ref <- load_municipios_referencia()
+    oficiais <- if (is.null(ref)) character() else ref$cod_ibge[ref$municipio %in% municipios_do_territorio()$municipio & ref$gve %in% municipios_do_territorio()$gve]
+    unique(c(oficiais, as.character(stats::na.omit(dados_filtrados_dimensoes()$cod_ibge))))
+  })
+
+  # Chaves das áreas do mapa que ficam fora do território filtrado.
+  areas_fora_do_filtro <- reactive({
+    nivel <- nivel_mapa_atual()
+    shape <- get_local_shape_layer(nivel)
+    if (!territorio_filtrado() || is.null(shape)) {
+      return(character())
+    }
+    if (nivel == "municipio") {
+      chaves <- as.character(shape$cod_ibge)
+      return(chaves[!(chaves %in% codigos_do_territorio())])
+    }
+    coluna <- if (nivel == "gve") "gve" else "drs"
+    dentro <- unique(normalize_shape_key(municipios_do_territorio()[[coluna]], level = nivel))
+    chaves <- as.character(shape$map_key)
+    chaves[!(chaves %in% dentro)]
+  })
+
+  # O nível do mapa não pode ser maior que o território: com uma GVE escolhida, o polígono
+  # da DRS mostraria só os números da GVE com o nome da DRS.
+  observeEvent(list(input$filtro_drs, input$filtro_gve, input$filtro_municipio), {
+    niveis <- c("Município" = "municipio", "GVE" = "gve", "DRS" = "drs")
+    if (is_municipio_selected()) {
+      niveis <- niveis["Município"]
+    } else if (!is.null(input$filtro_gve) && input$filtro_gve != "Todas") {
+      niveis <- niveis[c("Município", "GVE")]
+    }
+    atual <- if (!is.null(input$nivel_mapa) && input$nivel_mapa %in% niveis) input$nivel_mapa else "municipio"
+    updateSelectInput(session, "nivel_mapa", choices = niveis, selected = atual)
+
+    # Ranking: com uma DRS escolhida, "Por DRS" teria uma barra só.
+    opcoes_ranking <- c("Por GVE" = "gve", "Por DRS" = "drs", "Por município" = "municipio")
+    if (!is.null(input$filtro_drs) && input$filtro_drs != "Todas") {
+      opcoes_ranking <- opcoes_ranking[c("Por GVE", "Por município")]
+    }
+    agrupar <- if (!is.null(input$agrupar_territorio) && input$agrupar_territorio %in% opcoes_ranking) input$agrupar_territorio else "gve"
+    updateRadioButtons(session, "agrupar_territorio", choices = opcoes_ranking, selected = agrupar, inline = TRUE)
+  }, ignoreInit = TRUE)
+
   output$mapa <- renderLeaflet({
+    leaflet(options = leafletOptions(minZoom = 5, zoomSnap = 0.25)) %>%
+      addProviderTiles("CartoDB.Positron") %>%
+      fitBounds(limites_sp[1], limites_sp[2], limites_sp[3], limites_sp[4])
+  })
+
+  # Ao escolher DRS, GVE ou município, o mapa aproxima no território escolhido.
+  observeEvent(
+    list(input$filtro_drs, input$filtro_gve, input$filtro_municipio),
+    {
+      municipios <- get_local_shape_layer("municipio")
+      limites <- limites_sp
+      if (territorio_filtrado() && !is.null(municipios)) {
+        selecionados <- municipios[as.character(municipios$cod_ibge) %in% codigos_do_territorio(), ]
+        if (nrow(selecionados) > 0) {
+          limites <- as.numeric(sf::st_bbox(selecionados))
+        }
+      }
+      leafletProxy("mapa") %>%
+        flyToBounds(limites[1], limites[2], limites[3], limites[4], options = list(duration = 0.6, padding = c(20, 20)))
+    },
+    ignoreInit = TRUE
+  )
+
+  observe({
     nivel <- nivel_mapa_atual()
     df_mapa <- dados_mapa_nivel()
+    shape <- get_local_shape_layer(nivel)
+    proxy <- leafletProxy("mapa") %>%
+      clearShapes() %>%
+      clearControls()
 
-    if (nrow(df_mapa) == 0) {
-      return(
-        leaflet() %>%
-          addProviderTiles("CartoDB.Positron") %>%
-          setView(lng = -48.0, lat = -22.5, zoom = 6)
-      )
+    if (is.null(shape) || nrow(shape) == 0) {
+      return(invisible(NULL))
     }
 
-    pal <- colorFactor(
-      palette = c("#dbeafe", "#bfdbfe", "#93c5fd", "#60a5fa", "#2563eb", "#1e3a8a"),
-      levels = incidencia_faixas,
+    shape_key <- if (nivel == "municipio") as.character(shape$cod_ibge) else as.character(shape$map_key)
+    idx <- match(shape_key, df_mapa$map_key)
+
+    # Com filtro de território, áreas fora dele ficam apagadas, sem números e sem clique.
+    fora_filtro <- shape_key %in% areas_fora_do_filtro()
+
+    shape$rotulo <- dplyr::coalesce(df_mapa$rotulo[idx], as.character(shape$map_label))
+    shape$casos <- df_mapa$casos[idx]
+    shape$incidencia <- df_mapa$incidencia[idx]
+    shape$status_surto <- df_mapa$status_surto[idx]
+    faixas <- faixas_incidencia(df_mapa$incidencia)
+    shape$faixa <- ifelse(is.na(idx), "Sem notificação", classificar_faixa(shape$incidencia, faixas))
+    niveis <- c(faixas$rotulos, "Sem notificação", "Sem população")
+    paleta <- colorFactor(
+      palette = c(cores_faixas[round(seq(1, length(cores_faixas), length.out = length(faixas$rotulos)))], "#e5e7eb", "#fde68a"),
+      levels = niveis,
       ordered = TRUE,
       na.color = "#e5e7eb"
     )
+    shape$layer_id <- paste0(nivel, "::", shape_key)
 
-    local_shape <- get_local_shape_layer(nivel)
-    shape_source <- "local"
-
-    sanitize_map_label <- function(x) {
-      x <- as.character(x)
-      x <- trimws(gsub("[\\r\\n\\t]+", " ", x))
-      x <- gsub("\\s{2,}", " ", x)
-      x[is.na(x) | x == ""] <- "Área sem identificação"
-      x <- sub("^([^,;|/]+).*$", "\\1", x)
-      x <- trimws(x)
-      x[nchar(x) > 80] <- paste0(substr(x[nchar(x) > 80], 1, 80), "...")
-      x
+    formatar_num <- function(x, digitos = 0) {
+      ifelse(is.finite(x), format(round(x, digitos), big.mark = ".", decimal.mark = ",", nsmall = digitos), "—")
     }
-
-    if (is.null(local_shape) && nivel == "municipio") {
-      geobr_shape <- get_sp_municipality_shapes()
-      if (!is.null(geobr_shape) && nrow(geobr_shape) > 0) {
-        local_shape <- geobr_shape %>%
-          mutate(
-            map_key = municipio_norm,
-            map_label = name_muni
-          )
-        shape_source <- "geobr"
-      }
-    }
-
-    if (!is.null(local_shape) && nrow(local_shape) > 0) {
-      lookup_parts <- list(
-        df_mapa %>%
-          transmute(
-            join_key = as.character(map_key),
-            rotulo_dado = rotulo,
-            casos, surtos, populacao, incidencia, status_surto, faixa_incidencia
-          ),
-        df_mapa %>%
-          transmute(
-            join_key = as.character(map_key_alt),
-            rotulo_dado = rotulo,
-            casos, surtos, populacao, incidencia, status_surto, faixa_incidencia
-          ),
-        df_mapa %>%
-          transmute(
-            join_key = normalize_shape_key(rotulo, level = nivel),
-            rotulo_dado = rotulo,
-            casos, surtos, populacao, incidencia, status_surto, faixa_incidencia
-          )
+    shape$opacidade <- ifelse(fora_filtro, 0.12, 0.85)
+    shape$popup <- ifelse(
+      is.na(idx),
+      paste0(
+        "<strong>", htmltools::htmlEscape(shape$rotulo), "</strong><br>",
+        ifelse(fora_filtro, "Fora do território selecionado", "Sem notificação no período")
+      ),
+      paste0(
+        "<strong>", htmltools::htmlEscape(shape$rotulo), "</strong><br>",
+        "Casos: ", formatar_num(shape$casos), "<br>",
+        "Incidência: ", formatar_num(shape$incidencia, 1), " por 100 mil hab.<br>",
+        "Faixa: ", shape$faixa, "<br>",
+        "Surto: ", shape$status_surto
       )
-
-      if (nivel %in% c("gve", "drs")) {
-        lookup_parts <- c(
-          lookup_parts,
-          list(
-            df_mapa %>%
-              transmute(
-                join_key = extract_numeric_geo_key(rotulo, level = nivel),
-                rotulo_dado = rotulo,
-                casos, surtos, populacao, incidencia, status_surto, faixa_incidencia
-              )
-          )
-        )
-      }
-
-      mapa_lookup <- bind_rows(lookup_parts) %>%
-        mutate(join_key = trimws(as.character(join_key))) %>%
-        filter(!is.na(join_key), join_key != "") %>%
-        arrange(desc(casos), desc(incidencia)) %>%
-        distinct(join_key, .keep_all = TRUE)
-
-      shp_join <- local_shape
-      shape_key_1 <- as.character(shp_join$map_key)
-      shape_key_2 <- if ("map_key_alt" %in% names(shp_join)) as.character(shp_join$map_key_alt) else rep(NA_character_, nrow(shp_join))
-      shape_label_base <- if ("map_label" %in% names(shp_join)) as.character(shp_join$map_label) else as.character(shape_key_1)
-      shape_key_3 <- normalize_shape_key(shape_label_base, level = nivel)
-      shape_key_4 <- if (nivel %in% c("gve", "drs")) extract_numeric_geo_key(shape_label_base, level = nivel) else rep(NA_character_, nrow(shp_join))
-
-      lookup_keys <- mapa_lookup$join_key
-      idx_1 <- match(shape_key_1, lookup_keys)
-      idx_2 <- match(shape_key_2, lookup_keys)
-      idx_3 <- match(shape_key_3, lookup_keys)
-      idx_4 <- match(shape_key_4, lookup_keys)
-
-      idx_match <- ifelse(
-        !is.na(idx_1), idx_1,
-        ifelse(!is.na(idx_2), idx_2, ifelse(!is.na(idx_3), idx_3, idx_4))
-      )
-
-      shp_join$join_key <- lookup_keys[idx_match]
-      shp_join$rotulo_dado <- mapa_lookup$rotulo_dado[idx_match]
-      shp_join$casos <- mapa_lookup$casos[idx_match]
-      shp_join$surtos <- mapa_lookup$surtos[idx_match]
-      shp_join$populacao <- mapa_lookup$populacao[idx_match]
-      shp_join$incidencia <- mapa_lookup$incidencia[idx_match]
-      shp_join$status_surto <- mapa_lookup$status_surto[idx_match]
-      shp_join$faixa_incidencia <- mapa_lookup$faixa_incidencia[idx_match]
-
-      matched_polygons <- sum(!is.na(shp_join$casos))
-      if (matched_polygons > 0) {
-        shp_join$label_exibicao <- ifelse(
-          is.na(shp_join$rotulo_dado) | shp_join$rotulo_dado == "",
-          shape_label_base,
-          shp_join$rotulo_dado
-        )
-        shp_join$label_exibicao <- sanitize_map_label(shp_join$label_exibicao)
-
-        shp_join$surto_exibicao <- ifelse(
-          is.na(shp_join$status_surto) | shp_join$status_surto == "",
-          "Sem dados",
-          as.character(shp_join$status_surto)
-        )
-
-        shp_join$faixa_exibicao <- ifelse(
-          is.na(shp_join$faixa_incidencia) | shp_join$faixa_incidencia == "",
-          "Sem dados",
-          as.character(shp_join$faixa_incidencia)
-        )
-
-        shp_join$layer_id <- ifelse(
-          !is.na(shp_join$rotulo_dado) & shp_join$rotulo_dado != "",
-          normalize_key(shp_join$rotulo_dado),
-          dplyr::coalesce(shp_join$join_key, shape_key_1)
-        )
-        shp_join$layer_id[is.na(shp_join$layer_id) | shp_join$layer_id == ""] <- paste0("shape_", seq_len(nrow(shp_join)))
-
-        shp_join$tooltip <- ifelse(
-          is.na(shp_join$casos),
-          paste0("<strong>", shp_join$label_exibicao, "</strong><br>Sem notificações para os filtros"),
-          paste0(
-            "<strong>", shp_join$label_exibicao, "</strong><br>",
-            "Casos: ", format(round(shp_join$casos), big.mark = ".", decimal.mark = ","), "<br>",
-            "Incidência: ", format(round(shp_join$incidencia, 2), decimal.mark = ","), "/100 mil<br>",
-            "Faixa de incidência: ", shp_join$faixa_exibicao, "<br>",
-            "Situação de surto: ", shp_join$surto_exibicao
-          )
-        )
-
-        titulo_legenda <- ifelse(
-          shape_source == "local",
-          "Faixa de incidência (/100 mil)",
-          "Faixa de incidência (/100 mil) - fallback"
-        )
-
-        return(
-          leaflet(shp_join) %>%
-            addProviderTiles("CartoDB.Positron") %>%
-            addPolygons(
-              fillColor = ~pal(faixa_incidencia),
-              color = "#d1d5db",
-              weight = 1,
-              fillOpacity = 0.8,
-              smoothFactor = 0.2,
-              layerId = ~layer_id,
-              popup = ~htmltools::HTML(tooltip),
-              highlightOptions = highlightOptions(weight = 2, color = "#005ca9", bringToFront = TRUE)
-            ) %>%
-            addLegend(
-              colors = unname(pal(incidencia_faixas)),
-              labels = incidencia_faixas,
-              title = titulo_legenda,
-              position = "bottomright",
-              opacity = 0.9
-            )
-        )
-      }
-    }
-
-    pontos_base <- pontos_base_mapa()
-    pontos <- df_mapa %>%
-      left_join(pontos_base, by = "rotulo") %>%
-      filter(is.finite(lat), is.finite(lng))
-
-    if (nrow(pontos) == 0) {
-      return(
-        leaflet() %>%
-          addProviderTiles("CartoDB.Positron") %>%
-          setView(lng = -48.0, lat = -22.5, zoom = 6)
-      )
-    }
-
-    titulo_nivel <- switch(
-      nivel,
-      municipio = "Município",
-      gve = "GVE",
-      drs = "DRS"
     )
 
-    leaflet(pontos) %>%
-      addProviderTiles("CartoDB.Positron") %>%
-      setView(lng = -48.0, lat = -22.5, zoom = 6) %>%
-      addCircleMarkers(
-        lng = ~lng,
-        lat = ~lat,
-        layerId = ~ifelse(!is.na(map_key) & map_key != "", as.character(map_key), as.character(rotulo)),
-        radius = ~pmax(6, sqrt(casos) / 1.5),
-        stroke = TRUE,
-        weight = 1.2,
-        color = "#0f172a",
-        fillColor = ~pal(faixa_incidencia),
-        fillOpacity = 0.85,
-        popup = ~paste0(
-          "<strong>", titulo_nivel, ": ", rotulo, "</strong><br>",
-          "Casos: ", format(round(casos), big.mark = ".", decimal.mark = ","), "<br>",
-          "Incidência: ", format(round(incidencia, 2), decimal.mark = ","), "/100 mil<br>",
-          "Faixa de incidência: ", faixa_incidencia, "<br>",
-          "Situação de surto: ", status_surto
-        )
+    titulo_nivel <- switch(nivel, municipio = "município", gve = "GVE", drs = "DRS")
+    proxy %>%
+      addPolygons(
+        data = shape,
+        fillColor = ~paleta(faixa),
+        color = "#9ca3af",
+        weight = if (nivel == "municipio") 0.5 else 1.2,
+        fillOpacity = ~opacidade,
+        smoothFactor = 0.3,
+        layerId = ~layer_id,
+        label = ~rotulo,
+        popup = ~popup,
+        highlightOptions = highlightOptions(weight = 2.5, color = "#005ca9", bringToFront = TRUE)
       ) %>%
       addLegend(
-        colors = unname(pal(incidencia_faixas)),
-        labels = incidencia_faixas,
-        title = paste0("Faixa de incidência (/100 mil) - ", toupper(nivel)),
         position = "bottomright",
+        colors = paleta(niveis),
+        labels = niveis,
+        title = paste0("Incidência por ", titulo_nivel, "<br>(por 100 mil hab.)"),
         opacity = 0.9
       )
   })
 
-  selecionar_municipio_no_filtro <- function(clicked_id) {
-    if (is.null(clicked_id) || clicked_id == "") {
+  # Clique no mapa aplica o filtro da área clicada (município, GVE ou DRS).
+  selecionar_area_no_filtro <- function(clicked_id) {
+    if (is.null(clicked_id) || !grepl("::", clicked_id, fixed = TRUE)) {
+      return(invisible(NULL))
+    }
+    partes <- strsplit(clicked_id, "::", fixed = TRUE)[[1]]
+    nivel <- partes[1]
+    chave <- partes[2]
+    territorios <- territorios_disponiveis()
+
+    # Áreas fora do território filtrado só servem de contexto: o clique não troca de território.
+    if (isTRUE(chave %in% isolate(areas_fora_do_filtro()))) {
       return(invisible(NULL))
     }
 
-    if (nivel_mapa_atual() != "municipio") {
-      showNotification(
-        "Para filtrar por clique, selecione o mapa no nível Município.",
-        type = "message",
-        duration = 3
-      )
+    if (nivel == "municipio") {
+      ref <- load_municipios_referencia()
+      linha <- if (is.null(ref)) NULL else ref %>% filter(cod_ibge == chave) %>% slice_head(n = 1)
+      if (is.null(linha) || nrow(linha) == 0) {
+        linha <- dados_base() %>% filter(cod_ibge == chave) %>% slice_head(n = 1)
+      }
+      if (nrow(linha) == 0) {
+        return(invisible(NULL))
+      }
+      updateSelectInput(session, "filtro_drs", selected = linha$drs)
+      updateSelectInput(session, "filtro_gve", choices = c("Todas", clean_choice_values(territorios$gve[territorios$drs == linha$drs])), selected = linha$gve)
+      updateSelectInput(session, "filtro_municipio", choices = c("Todos", clean_choice_values(territorios$municipio[territorios$gve == linha$gve])), selected = linha$municipio)
       return(invisible(NULL))
     }
 
-    df_mapa <- dados_mapa_nivel()
-    if (nrow(df_mapa) == 0) {
+    coluna <- if (nivel == "gve") "gve" else "drs"
+    valores <- unique(territorios[[coluna]])
+    valor <- valores[normalize_shape_key(valores, level = nivel) == chave][1]
+    if (is.na(valor)) {
       return(invisible(NULL))
     }
-
-    clicked_key <- normalize_key(clicked_id)
-    match_tbl <- df_mapa %>%
-      filter(
-        map_key == clicked_id |
-          map_key_alt == clicked_id |
-          normalize_key(map_key) == clicked_key |
-          normalize_key(map_key_alt) == clicked_key |
-          normalize_key(rotulo) == clicked_key
-      )
-
-    if (nrow(match_tbl) == 0) {
-      return(invisible(NULL))
-    }
-
-    municipio_clicked <- as.character(match_tbl$rotulo[1])
-    if (is.na(municipio_clicked) || municipio_clicked == "") {
-      return(invisible(NULL))
-    }
-
-    updateSelectInput(session, "filtro_drs", selected = "Todas")
-    updateSelectInput(session, "filtro_gve", selected = "Todas")
-    if (!is.null(input$filtro_uvis)) {
-      updateSelectInput(session, "filtro_uvis", selected = "Todas")
-    }
-
-    if (requireNamespace("later", quietly = TRUE)) {
-      later::later(
-        function() updateSelectInput(session, "filtro_municipio", selected = municipio_clicked),
-        delay = 0.12
-      )
+    if (nivel == "gve") {
+      drs_valor <- territorios$drs[territorios$gve == valor][1]
+      updateSelectInput(session, "filtro_drs", selected = drs_valor)
+      updateSelectInput(session, "filtro_gve", choices = c("Todas", clean_choice_values(territorios$gve[territorios$drs == drs_valor])), selected = valor)
     } else {
-      updateSelectInput(session, "filtro_municipio", selected = municipio_clicked)
+      updateSelectInput(session, "filtro_drs", selected = valor)
+      updateSelectInput(session, "filtro_gve", selected = "Todas")
     }
+    updateSelectInput(session, "filtro_municipio", selected = "Todos")
   }
 
   observeEvent(input$mapa_shape_click, {
-    selecionar_municipio_no_filtro(input$mapa_shape_click$id)
-  }, ignoreInit = TRUE)
-
-  observeEvent(input$mapa_marker_click, {
-    selecionar_municipio_no_filtro(input$mapa_marker_click$id)
+    selecionar_area_no_filtro(input$mapa_shape_click$id)
   }, ignoreInit = TRUE)
 }
